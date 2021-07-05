@@ -22,9 +22,8 @@ export class YomichanEntry implements IYomichanDictionaryEntry {
   definitions: Definition[];
   sequence: number;
   tag: string;
-  duplicatedData: boolean;
 
-  constructor(data: IYomichanDictionaryEntry & { duplicatedData?: boolean }) {
+  constructor(data: IYomichanDictionaryEntry) {
     this.term = data.term;
     this.reading = data.reading;
     this.definitionTag = data.definitionTag;
@@ -33,7 +32,6 @@ export class YomichanEntry implements IYomichanDictionaryEntry {
     this.definitions = data.definitions;
     this.sequence = data.sequence;
     this.tag = data.tag;
-    this.duplicatedData = data.duplicatedData || false;
   }
 
   toJSON(): YomichanSchemaV3 {
