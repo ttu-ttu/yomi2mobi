@@ -12,6 +12,7 @@ async function main(args: Partial<{
   output: string;
   title: string;
   author: string;
+  debug: boolean;
 }>) {
   if (!args.input || !args.output || !args.title) {
     parser.print_help();
@@ -37,7 +38,7 @@ async function main(args: Partial<{
     contents.push({
       id: `entries-${i}`,
       filename: `entries-${i}.html`,
-      content: doc.end({ prettyPrint: true }),
+      content: doc.end({ prettyPrint: args.debug }),
     });
     console.log(`Converting... ${i}/${chunkedYomiEntries.length} (${(i / chunkedYomiEntries.length * 100).toFixed(2)}%)`)
   }
@@ -83,7 +84,9 @@ async function main(args: Partial<{
 
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
-  fsExtra.writeFileSync(path.join(outputDir, `${args.title}.opf`), opfXml.end());
+  fsExtra.writeFileSync(path.join(outputDir, `${args.title}.opf`), opfXml.end( {
+    prettyPrint: args.debug,
+  }));
 
   for (const content of contents) {
     fsExtra.writeFileSync(path.join(outputDir, content.filename), content.content);
@@ -100,5 +103,6 @@ parser.add_argument('-i', '--input', { help: 'Input directory' });
 parser.add_argument('-o', '--output', { help: 'Output directory' });
 parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });
 parser.add_argument('-a', '--author', { help: 'Author' });
+parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
 
 main(parser.parse_args());
