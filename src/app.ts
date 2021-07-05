@@ -4,7 +4,7 @@ import * as _ from 'lodash';
 import path from 'path';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
-import { KindleDictEntry, kindleEntriesToXHtml, yomichanEntryToKindle } from './utils/kindle-dict-entry';
+import { KindleDictEntry, kindleEntriesToXHtml, KindleInflection, yomichanEntryToKindle } from './utils/kindle-dict-entry';
 
 
 async function main(args: Partial<{
@@ -18,7 +18,37 @@ async function main(args: Partial<{
     parser.print_help();
     return;
   }
-  const yomiEntries = await loadDict(args.input);
+  let yomiEntries = await loadDict(args.input);
+
+  yomiEntries = yomiEntries.sort((a, b) => b.frequency - a.frequency);
+
+  let kindleEntries: KindleDictEntry[] = [];
+  for (const yomiEntry of yomiEntries) {
+    kindleEntries.push(yomichanEntryToKindle(yomiEntry));
+  }
+  const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
+  kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
+    let mergedInflections: KindleInflection[] = [];
+    for (const kindleEntry of similarKindleEntries) {
+      if (kindleEntry.hiddenLabel) {
+        mergedInflections.push({
+          name: '書き方',
+          value: kindleEntry.hiddenLabel,
+        });
+      }
+      mergedInflections.push(...kindleEntry.inflections);
+    }
+    mergedInflections = _.uniqBy(mergedInflections, (inf) => inf.value)
+      .filter((inf) => inf.value !== similarKindleEntries[0].hiddenLabel);
+
+    return {
+      headword: similarKindleEntries[0].headword,
+      hiddenLabel: similarKindleEntries[0].hiddenLabel,
+      inflections: mergedInflections,
+      definition: similarKindleEntries[0].definition,
+    };
+  })
+
 
   const contents: {
     id: string;
@@ -28,15 +58,9 @@ async function main(args: Partial<{
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
 
-  const chunkedYomiEntries = _.chunk(yomiEntries, 100);
-  for (let i = 0; i < chunkedYomiEntries.length; i += 1) {
-    const kindleEntries: KindleDictEntry[] = [];
-
-    for (const yomiEntry of chunkedYomiEntries[i]) {
-      kindleEntries.push(yomichanEntryToKindle(yomiEntry));
-    }
-
-    const doc = kindleEntriesToXHtml(kindleEntries);
+  const chunkedKindleEntries = _.chunk(kindleEntries, 100);
+  for (let i = 0; i < chunkedKindleEntries.length; i += 1) {
+    const doc = kindleEntriesToXHtml(chunkedKindleEntries[i]);
     const outputFilename = `entries-${i}.html`;
     contents.push({
       id: `entries-${i}`,
@@ -44,7 +68,7 @@ async function main(args: Partial<{
     });
     fsExtra.writeFileSync(path.join(outputDir, outputFilename), doc.end({ prettyPrint: args.debug }));
 
-    console.log(`Progress: ${i}/${chunkedYomiEntries.length} (${(i / chunkedYomiEntries.length * 100).toFixed(2)}%)`)
+    console.log(`Progress: ${i}/${chunkedKindleEntries.length} (${(i / chunkedKindleEntries.length * 100).toFixed(2)}%)`);
   }
 
   let opfXml = fragment()

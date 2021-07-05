@@ -5,7 +5,7 @@ import { Definition, InflectionRuleEnum, StructuredContentItem } from '../yomich
 import { toHiragana, toKatakana } from './kana-transformations';
 import * as _ from 'lodash';
 
-interface KindleInflection {
+export interface KindleInflection {
   name: string;
   value: string;
 }
