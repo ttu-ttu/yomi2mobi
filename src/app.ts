@@ -23,8 +23,10 @@ async function main(args: Partial<{
   const contents: {
     id: string;
     filename: string;
-    content: string;
   }[] = [];
+
+  const outputDir = args.output;
+  fsExtra.mkdirpSync(outputDir);
 
   const chunkedYomiEntries = _.chunk(yomiEntries, 100);
   for (let i = 0; i < chunkedYomiEntries.length; i += 1) {
@@ -35,12 +37,14 @@ async function main(args: Partial<{
     }
 
     const doc = kindleEntriesToXHtml(kindleEntries);
+    const outputFilename = `entries-${i}.html`;
     contents.push({
       id: `entries-${i}`,
-      filename: `entries-${i}.html`,
-      content: doc.end({ prettyPrint: args.debug }),
+      filename: outputFilename,
     });
-    console.log(`Converting... ${i}/${chunkedYomiEntries.length} (${(i / chunkedYomiEntries.length * 100).toFixed(2)}%)`)
+    fsExtra.writeFileSync(path.join(outputDir, outputFilename), doc.end({ prettyPrint: args.debug }));
+
+    console.log(`Progress: ${i}/${chunkedYomiEntries.length} (${(i / chunkedYomiEntries.length * 100).toFixed(2)}%)`)
   }
 
   let opfXml = fragment()
@@ -82,16 +86,9 @@ async function main(args: Partial<{
   }
   opfXml = opfXml.up();
 
-  const outputDir = args.output;
-  fsExtra.mkdirpSync(outputDir);
   fsExtra.writeFileSync(path.join(outputDir, `${args.title}.opf`), opfXml.end( {
     prettyPrint: args.debug,
   }));
-
-  for (const content of contents) {
-    fsExtra.writeFileSync(path.join(outputDir, content.filename), content.content);
-  }
-
 }
 
 
