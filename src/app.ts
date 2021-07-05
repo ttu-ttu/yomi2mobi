@@ -37,8 +37,9 @@ async function main(args: Partial<{
     contents.push({
       id: `entries-${i}`,
       filename: `entries-${i}.html`,
-      content: doc.end(),
+      content: doc.end({ prettyPrint: true }),
     });
+    console.log(`Converting... ${i}/${chunkedYomiEntries.length} (${(i / chunkedYomiEntries.length * 100).toFixed(2)}%)`)
   }
 
   let opfXml = fragment()

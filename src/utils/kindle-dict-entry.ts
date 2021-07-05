@@ -2,6 +2,8 @@ import { fragment } from 'xmlbuilder2';
 import { XMLBuilder } from 'xmlbuilder2/lib/interfaces';
 import { YomichanEntry } from '../yomichan/yomichan-formatter';
 import { Definition, InflectionRuleEnum, StructuredContentItem } from '../yomichan/yomichan-types';
+import { toHiragana, toKatakana } from './kana-transformations';
+import * as _ from 'lodash';
 
 interface KindleInflection {
   name: string;
@@ -93,78 +95,76 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
     updatedDefinitions = yomiEntry.definitions.slice(1);
   }
 
-  const inflections: KindleInflection[] = [];
+  let inflections: KindleInflection[] = [];
 
-  const pushGodanGeneralInflections = (word: string) => {
-    const wordBrokenDown = Array.from(word);
-
-    const aForm = convertToDan(wordBrokenDown.slice(-1)[0], 'あ');
-    if (aForm) {
-      inflections.push({
-        name: '未然形',
-        value: [
-          ...wordBrokenDown.slice(0, -1),
-          aForm,
-        ].join(''),
-      });
-    }
-
-    const oForm = convertToDan(wordBrokenDown.slice(-1)[0], 'お');
-    if (oForm) {
-      inflections.push({
-        name: '未然形',
-        value: [
-          ...wordBrokenDown.slice(0, -1),
-          oForm,
-        ].join(''),
-      });
-    }
-
-    const eForm = convertToDan(wordBrokenDown.slice(-1)[0], 'え');
-    if (eForm) {
-      inflections.push({
-        name: '仮定形/命令形',
-        value: [
-          ...wordBrokenDown.slice(0, -1),
-          eForm,
-        ].join(''),
-      });
-    }
-  };
-
+  inflections.push({
+    name: '読み方',
+    value: toHiragana(yomiEntry.term),
+  });
+  inflections.push({
+    name: '読み方',
+    value: toKatakana(yomiEntry.term),
+  });
+  inflections.push({
+    name: '読み方',
+    value: toHiragana(yomiEntry.reading),
+  });
+  inflections.push({
+    name: '読み方',
+    value: toKatakana(yomiEntry.reading),
+  });
   for (const yomiInflection of yomiEntry.inflectionRule.split(' ')) {
     switch (yomiInflection) {
-      case InflectionRuleEnum.Godan:
+      case InflectionRuleEnum.Godan: {
         if (/[うくすつぬふむるぐずづぶぷ]$/.test(yomiEntry.term)) {
+          const pushGodanGeneralInflections = (word: string) => {
+            if (word.length === 0) {
+              return;
+            }
+            const wordBrokenDown = Array.from(word);
+        
+            const aForm = convertToDan(wordBrokenDown.slice(-1)[0], 'あ');
+            if (aForm) {
+              inflections.push({
+                name: '未然形',
+                value: word.replace(/.$/u, aForm),
+              });
+            }
+        
+            const oForm = convertToDan(wordBrokenDown.slice(-1)[0], 'お');
+            if (oForm) {
+              inflections.push({
+                name: '未然形',
+                value: word.replace(/.$/u, oForm),
+              });
+            }
+        
+            const eForm = convertToDan(wordBrokenDown.slice(-1)[0], 'え');
+            if (eForm) {
+              inflections.push({
+                name: '仮定形・命令形',
+                value: word.replace(/.$/u, eForm),
+              });
+            }
+          };
+        
           if (/[うつる]|(行く)$/.test(yomiEntry.term)) {
             inflections.push({
               name: '連用形',
-              value: [
-                ...Array.from(yomiEntry.term).slice(0, -1),
-                'っ',
-              ].join(''),
+              value: yomiEntry.term.replace(/.$/u, 'っ'),
             });
             inflections.push({
               name: '連用形',
-              value: [
-                ...Array.from(yomiEntry.reading).slice(0, -1),
-                'っ',
-              ].join(''),
+              value: yomiEntry.reading.replace(/.$/u, 'っ'),
             });
           } else if (/[ぬぶ]$/.test(yomiEntry.term)) {
             inflections.push({
               name: '連用形',
-              value: [
-                ...Array.from(yomiEntry.term).slice(0, -1),
-                'ん',
-              ].join(''),
+              value: yomiEntry.term.replace(/.$/u, 'ん'),
             });
             inflections.push({
               name: '連用形',
-              value: [
-                ...Array.from(yomiEntry.reading).slice(0, -1),
-                'ん',
-              ].join(''),
+              value: yomiEntry.reading.replace(/.$/u, 'ん'),
             });
           } else {
             const termBrokenDown = Array.from(yomiEntry.term);
@@ -172,17 +172,11 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
             if (iForm) {
               inflections.push({
                 name: '連用形',
-                value: [
-                  ...termBrokenDown.slice(0, -1),
-                  iForm,
-                ].join(''),
+                value: yomiEntry.term.replace(/.$/u, iForm),
               });
               inflections.push({
                 name: '連用形',
-                value: [
-                  ...Array.from(yomiEntry.reading).slice(0, -1),
-                  iForm,
-                ].join(''),
+                value: yomiEntry.reading.replace(/.$/u, iForm),
               });
             }
           }
@@ -190,9 +184,164 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
           pushGodanGeneralInflections(yomiEntry.reading);
         }
         break;
-      // case InflectionRuleEnum.Ichidan:
+      }
+      case InflectionRuleEnum.Ichidan: {
+        const pushIchidanGeneralInflections = (word: string) => {
+          inflections.push({
+            name: '未然形・連用形',
+            value: word.replace(/る$/u, ''),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/る$/u, 'れ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/る$/u, 'ろ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/る$/u, 'よ'),
+          });
+        };
+        pushIchidanGeneralInflections(yomiEntry.term);
+        pushIchidanGeneralInflections(yomiEntry.reading);
+        break;
+      }
+      case InflectionRuleEnum.Kuru: {
+        const pushKuruGeneralInflections = (word: string) => {
+          // Handle all cases as term may be in hiragana form
+          inflections.push({
+            name: '未然形・連用形',
+            value: word.replace(/来る$/u, '来'),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/来る$/u, '来れ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/来る$/u, '来い'),
+          });
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/くる$/u, 'こ'),
+          });
+          inflections.push({
+            name: '連用形',
+            value: word.replace(/くる$/u, 'き'),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/くる$/u, 'くれ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/くる$/u, 'こい'),
+          });
+        };
+        pushKuruGeneralInflections(yomiEntry.term);
+        pushKuruGeneralInflections(yomiEntry.reading);
+        break;
+      }
+      case InflectionRuleEnum.Suru: {
+        const pushSuruGeneralInflections = (word: string) => {
+          inflections.push({
+            name: '未然形・連用形',
+            value: word.replace(/する$/u, 'し'),
+          });
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/する$/u, 'せ'),
+          });
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/する$/u, 'さ'),
+          });
+          inflections.push({
+            name: '終止形・連体形',
+            value: word.replace(/する$/u, 'す'),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/する$/u, 'すれ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/する$/u, 'しろ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/する$/u, 'せよ'),
+          });
+        };
+        pushSuruGeneralInflections(yomiEntry.term);
+        pushSuruGeneralInflections(yomiEntry.reading);
+        break;
+      }
+      case InflectionRuleEnum.Zuru: {
+        const pushSuruGeneralInflections = (word: string) => {
+          inflections.push({
+            name: '未然形・連用形',
+            value: word.replace(/ずる$/u, 'じ'),
+          });
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/ずる$/u, 'ぜ'),
+          });
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/ずる$/u, 'ざ'),
+          });
+          inflections.push({
+            name: '終止形・連体形',
+            value: word.replace(/ずる$/u, 'ず'),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/ずる$/u, 'ずれ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/ずる$/u, 'じろ'),
+          });
+          inflections.push({
+            name: '命令形',
+            value: word.replace(/ずる$/u, 'ぜよ'),
+          });
+        };
+        pushSuruGeneralInflections(yomiEntry.term);
+        pushSuruGeneralInflections(yomiEntry.reading);
+        break;
+      }
+      case InflectionRuleEnum.IAdjective: {
+        const pushIAdjectiveGeneralInflections = (word: string) => {
+          inflections.push({
+            name: '未然形',
+            value: word.replace(/い$/u, 'かろ'),
+          });
+          inflections.push({
+            name: '連用形',
+            value: word.replace(/い$/u, 'かっ'),
+          });
+          inflections.push({
+            name: '連用形',
+            value: word.replace(/い$/u, 'く'),
+          });
+          inflections.push({
+            name: '仮定形',
+            value: word.replace(/い$/u, 'けれ'),
+          });
+        };
+        pushIAdjectiveGeneralInflections(yomiEntry.term);
+        pushIAdjectiveGeneralInflections(yomiEntry.reading);
+        break;
+      }
     }
   }
+
+  inflections = _.uniqBy(inflections, (inf) => inf.value)
+    .filter((inf) => inf.value !== yomiEntry.term && inf.value.length);
 
   return {
     headword: headword,
