@@ -113,6 +113,20 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
     name: '読み方',
     value: toKatakana(yomiEntry.reading),
   });
+
+
+  for (let i = 0; i < yomiEntry.term.length - 1; i++) {
+    let w =  Array.from(yomiEntry.term);
+    if (yomiEntry.term[i] == yomiEntry.term[i + 1]) {
+      w[i + 1] = '々'
+      inflections.push({
+        name: '踊り字',
+        value: w.join(''),
+      });
+      w[i + 1] = w[i]
+    }
+  }
+
   for (const yomiInflection of yomiEntry.inflectionRule.split(' ')) {
     switch (yomiInflection) {
       case InflectionRuleEnum.Godan: {
