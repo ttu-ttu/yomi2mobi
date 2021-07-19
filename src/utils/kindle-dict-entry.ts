@@ -81,6 +81,27 @@ function convertToDan(changingKana: string, newDan: 'あ' | 'い' | 'う' | 'え
   }
 }
 
+const godanTeFormTable: [RegExp, string][] = [
+  [/[うつる]$/u, 'って'], 
+  [/す$/u, 'して'],
+  [/く$/u, 'いて'],
+  [/ぐ$/u, 'いで'],
+  [/[ぶむぬ]$/u, 'んで']];
+
+const ichidanTeFormTable: [RegExp, string][] = [[/る$/u, 'て']];
+
+function applyTeForm(word: string, table: [RegExp, string][], inflections: KindleInflection[]) {
+  for (const [re, c] of table){
+    if (re.test(word)){
+      inflections.push({
+        name: 'て形',
+        value: word.replace(re, c)
+      });
+      break;
+    }
+  }
+}
+
 export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword = true): KindleDictEntry {
   let headword = yomiEntry.term;
   const processedDefinitions: string[] = [];
@@ -160,8 +181,10 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
                 value: word.replace(/.$/u, eForm),
               });
             }
+            applyTeForm(word, godanTeFormTable, inflections);
           };
-        
+          
+
           if (/[うつる]|(行く)$/.test(yomiEntry.term)) {
             inflections.push({
               name: '連用形',
@@ -217,6 +240,8 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
             name: '命令形',
             value: word.replace(/る$/u, 'よ'),
           });
+
+          applyTeForm(word, ichidanTeFormTable, inflections);
         };
         pushIchidanGeneralInflections(yomiEntry.term);
         pushIchidanGeneralInflections(yomiEntry.reading);
@@ -238,6 +263,10 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
             value: word.replace(/来る$/u, '来い'),
           });
           inflections.push({
+            name: 'て形',
+            value: word.replace(/来る$/u, '来て'),
+          });
+          inflections.push({
             name: '未然形',
             value: word.replace(/くる$/u, 'こ'),
           });
@@ -252,6 +281,10 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
           inflections.push({
             name: '命令形',
             value: word.replace(/くる$/u, 'こい'),
+          });
+          inflections.push({
+            name: 'て形',
+            value: word.replace(/くる$/u, 'きて'),
           });
         };
         pushKuruGeneralInflections(yomiEntry.term);
@@ -287,6 +320,10 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
           inflections.push({
             name: '命令形',
             value: word.replace(/する$/u, 'せよ'),
+          });
+          inflections.push({
+            name: 'て形',
+            value: word.replace(/する$/u, 'して'),
           });
         };
         pushSuruGeneralInflections(yomiEntry.term);
