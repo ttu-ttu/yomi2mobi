@@ -1,8 +1,9 @@
 import { fragment } from 'xmlbuilder2';
 import { XMLBuilder } from 'xmlbuilder2/lib/interfaces';
 import { YomichanEntry } from '../yomichan/yomichan-formatter';
-import { Definition, InflectionRuleEnum, StructuredContentItem } from '../yomichan/yomichan-types';
+import { Definition, ImageDefinition, ImageOptions, InflectionRuleEnum, HTMLContent, HTMLTag } from '../yomichan/yomichan-types';
 import { toHiragana, toKatakana } from './kana-transformations';
+import { hasOwnProperty } from './hasOwnProperty';
 import * as _ from 'lodash';
 
 export interface KindleInflection {
@@ -14,32 +15,128 @@ export interface KindleDictEntry {
   headword: string;
   hiddenLabel?: string;
   inflections: KindleInflection[];
-  definition: string;
+  definition: XMLBuilder[];
 }
 
-function structuredContentItemToHtmlText(item: StructuredContentItem): string {
-  if (typeof item === 'string') {
-    return item;
+
+function structuredContentItemToHtmlText(item: Definition): XMLBuilder {
+  let f = fragment();
+  if (item === undefined) {
+    return stringToXML('undef')
+  } else if (typeof item === 'string') {
+    for (const ss of item.split('\n')){
+      f = f.txt(ss).ele('br').up()
+    }
+    return f;
   } else if (Array.isArray(item)) {
-    return item.map((subItem) => structuredContentItemToHtmlText(subItem)).join('');
+    const subs = item.map((subItem) => structuredContentItemToHtmlText(subItem));
+    for (const i of subs) {
+      f = f.import(i)
+    }
+    return f
   }
-  switch (item.tag) {
-    case 'img':
-      return '(Image)';
+  
+  if (hasOwnProperty(item, 'tag')){
+    if (item.tag == 'img' && hasOwnProperty(item, 'path')) {
+      return imgToXML(item)
+    } else {
+      return tagToXML(item)
+    }
   }
-  return structuredContentItemToHtmlText(item.content);
+  if (hasOwnProperty(item, 'type') && item.type == 'structured-content') 
+    return structuredContentItemToHtmlText(item.content);
+  return f
+}
+const img_saved_prop = ['path', 'description', 'width', 'height', 'style', 'collapsible', 'pixelated', 'imageRendering']
+export function path_fix(path: string){
+  if (path.endsWith('gif') || path.endsWith('tiff')) {
+    let npath = path.split('.');
+    npath[npath.length - 1] = 'png'
+    return npath.join('.')
+  }
+
+  return path
+}
+function imgToXML(s: ImageOptions): XMLBuilder {
+  let f = fragment();
+  let conf :{[x:string] : any} = {
+    'src': path_fix(s.path),
+    'alt': s.description || 'alt'
+  };
+  let sizeUnit = s.sizeUnits !== undefined ? s.sizeUnits : "";
+  for (const k of Object.keys(s)) {
+    if (img_saved_prop.filter(x => x ==k).length > 0)
+       continue
+    conf[k] = s[k]
+  }
+  
+  let style = s.style;
+  const unit = s.sizeUnits || 'px'
+  if (s.width)
+    style = {...style, width: s.width.toString() + unit}
+  if (s.height)
+    style = {...style, height: s.height.toString() + unit}
+  if (s.imageRendering)
+    style = {...style, imageRendering: s.imageRendering}
+  if (!s.maxHeight)
+    style = {...style, maxHeight: '200px'}
+  if (style) {
+    const sstyle = flatten_css(style)
+    if (sstyle.length > 0)
+      conf['style'] = sstyle
+  }
+  f.ele('img', conf)
+  return f;
+}
+function flatten_css(obj_style: Record<string, any>) : string{
+  let style = Object.entries(obj_style).
+    map(([k, v]) => 
+      `${k.replace(/[A-Z]/g,match => `-${match.toLowerCase()}`)}:${v}`).join(';');
+  if (style.length > 0)
+    style += ';'
+  return style
+}
+const tag_saved_prop = ['tag', 'style', 'content']
+function tagToXML(item: HTMLTag): XMLBuilder {
+  let f = fragment()
+  let conf: {[x: string]: any} = {}
+  for (const k of Object.keys(item)) {
+    if (tag_saved_prop.filter(x => x == k).length > 0)
+       continue
+    conf[k] = item[k]
+  }
+  
+  if (item.style) {
+    const style = flatten_css(item.style)
+    if (style.length > 0)
+      conf['style'] = style
+  }
+
+  f = f.ele(item.tag, conf)
+  if (Array.isArray(item.content)) {
+    for (const i of item.content.map(structuredContentItemToHtmlText))
+      f = f.import(i)
+  } else if (item.content != undefined) {
+    f = f.import(structuredContentItemToHtmlText(item.content))
+  }
+  return f
+  
+}
+function stringToXML(s: string): XMLBuilder {
+  let f = fragment();
+  const splits = s.split('\n')
+  for (let i = 0; i < splits.length; i++) {
+    if (i > 0) {
+      f = f.ele('br').up();
+    }
+    f.txt(splits[i]);
+  }
+  return f;
 }
 
-function yomichanDefinitionToHtmlText(definition: Definition): string {
-  if (typeof definition === 'string') {
-    return definition;
-  } else if (definition.type === 'text') {
-    return definition.text;
-  } else if (definition.type === 'image') {
-    return '(Image)';
-  }
 
-  return structuredContentItemToHtmlText(definition.content);
+function yomichanDefinitionToHtmlText(definition: Definition): XMLBuilder {
+  return structuredContentItemToHtmlText(definition);
 }
 
 function convertToDan(changingKana: string, newDan: 'あ' | 'い' | 'う' | 'え' | 'お') {
@@ -102,19 +199,20 @@ function applyTeForm(word: string, table: [RegExp, string][], inflections: Kindl
   }
 }
 
-export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword = true): KindleDictEntry {
+export function yomichanEntryToKindle(yomiEntry: YomichanEntry, 
+  firstLineAsHeadword = true, econ = true): KindleDictEntry {
   let headword = yomiEntry.term;
-  const processedDefinitions: string[] = [];
+  // const processedDefinitions: string[] = [];
   let updatedDefinitions = yomiEntry.definitions;
 
-  if (firstLineAsHeadword && yomiEntry.definitions[0]) {
-    const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0]);
-    const firstDefinitionSplit = firstDefinition.split('\n');
-    const headerString = firstDefinitionSplit[0];
-    headword = headerString;
-    processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
-    updatedDefinitions = yomiEntry.definitions.slice(1);
-  }
+  // if (firstLineAsHeadword && yomiEntry.definitions[0]) {
+  //   const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0]);
+  //   const firstDefinitionSplit = firstDefinition.first();
+  //   const headerString = firstDefinitionSplit[0];
+  //   headword = headerString;
+  //   processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
+  //   updatedDefinitions = yomiEntry.definitions.slice(1);
+  // }
 
   let inflections: KindleInflection[] = [];
 
@@ -181,7 +279,6 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
                 value: word.replace(/.$/u, eForm),
               });
             }
-            applyTeForm(word, godanTeFormTable, inflections);
           };
           
 
@@ -193,6 +290,14 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
             inflections.push({
               name: '連用形',
               value: yomiEntry.reading.replace(/.$/u, 'っ'),
+            });
+            econ && inflections.push({
+              name: 'て形',
+              value: yomiEntry.term.replace(/.$/u, 'って')
+            });
+            econ && inflections.push({
+              name: 'て形',
+              value: yomiEntry.reading.replace(/.$/u, 'って')
             });
           } else if (/[ぬぶ]$/.test(yomiEntry.term)) {
             inflections.push({
@@ -216,6 +321,8 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
                 value: yomiEntry.reading.replace(/.$/u, iForm),
               });
             }
+            econ && applyTeForm(yomiEntry.reading, godanTeFormTable, inflections);
+            econ && applyTeForm(yomiEntry.term, godanTeFormTable, inflections);
           }
           pushGodanGeneralInflections(yomiEntry.term);
           pushGodanGeneralInflections(yomiEntry.reading);
@@ -399,9 +506,9 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
     hiddenLabel: yomiEntry.term,
     inflections,
     definition: [
-      ...processedDefinitions,
+      // ...processedDefinitions,
       ...updatedDefinitions.map((d) => yomichanDefinitionToHtmlText(d)),
-    ].join('\n'),
+    ],
   }
 }
 
@@ -419,23 +526,18 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
       }).ele('b').txt(kindleEntry.headword).up().up();
 
     if (kindleEntry.inflections.length) {
-      xmlEntry = xmlEntry.ele('idx:infl');
       for (const inflection of kindleEntry.inflections) {
-        xmlEntry = xmlEntry.ele('idx:iform', {
-          name: inflection.name,
+        xmlEntry = xmlEntry.ele('idx:orth', {
           value: inflection.value, 
         }).up();
       }
-      xmlEntry = xmlEntry.up();
     }
 
-    xmlEntry = xmlEntry.ele('p');
-    const rows = kindleEntry.definition.split('\n');
-    for (let i = 0; i < rows.length; i += 1) {
-      xmlEntry = xmlEntry.txt(rows[i]);
-      if (i !== rows.length - 1) {
+    xmlEntry = xmlEntry.ele('p', {style: 'text-indent: 0;'});
+    for (let i = 0; i < kindleEntry.definition.length; i++) {
+      if (i > 0)
         xmlEntry = xmlEntry.ele('br').up();
-      }
+      xmlEntry = xmlEntry.import(kindleEntry.definition[i]);
     }
     xmlEntry = xmlEntry.up();
     xmlEntries.push(xmlEntry);

@@ -1,7 +1,9 @@
 import fsExtra from 'fs-extra';
 import path from 'path';
 import { YomichanEntry } from '../yomichan/yomichan-formatter';
-import { YomichanSchemaV3 } from '../yomichan/yomichan-types';
+import { Definition, YomichanSchemaV3 } from '../yomichan/yomichan-types';
+
+
 
 export async function loadDict(dictPath: string) {
   const yomiEntries: YomichanEntry[] = [];

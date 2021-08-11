@@ -1,3 +1,6 @@
+import _ from "lodash";
+import { hasOwnProperty } from "../utils/hasOwnProperty";
+
 type Term = string;
 type Reading = string;
 type DefinitionTag = string | null;
@@ -12,7 +15,6 @@ export enum InflectionRuleEnum {
 }
 export const specialInflectionRule = '情報なし';
 type Frequency = number;
-export type Definition = string | TextDefinition | ImageDefinition | StructuredDefinition;
 type SequenceNumber = number;  // same number = same entry if option is merge
 type Tag = string;
 
@@ -32,11 +34,12 @@ interface TextDefinition {
   text: string;
 }
 
-interface ImageOptions {
+export interface ImageOptions {
   path: string;
   width?: number;
   height?: number;
   title?: string;
+  sizeUnits?: "px"| "em";
   description?: string;
   pixelated?: boolean; // Whether the image should scale to parent container
   imageRendering?: 'auto' | 'pixelated' | 'crisp-edges';
@@ -52,20 +55,32 @@ export interface ImageDefinition extends ImageOptions {
 
 export interface StructuredDefinition {
   type: 'structured-content';
-  content: StructuredContentItem;
+  content: HTMLContent;
+}
+interface BaseHTMLTag {
+  tag: string;
+  style?: Record<string, any>;
+  content?: HTMLContent;
+  [x: string]: any
 }
 
-export type StructuredContentItem = string | StructuredContentItem[] | StructuredContentItemObject;
 
-export type StructuredContentItemObject = StructuredContentItemObjectRuby | StructuredContentItemObjectImage;
 
-interface StructuredContentItemObjectRuby {
-  tag: 'ruby' | 'rt' | 'rp';
-  content: StructuredContentItem;
-}
-
-export interface StructuredContentItemObjectImage extends ImageOptions {
+export interface ImageOptions extends BaseHTMLTag{
   tag: 'img';
-  verticalAlign?: 'baseline' | 'sub' | 'super' | 'text-top' | 'text-bottom' | 'middle' | 'top' | 'bottom';
-  sizeUnits?: 'px' | 'em';
+  path: string;
+  width?: number;
+  height?: number;
+  title?: string;
+  sizeUnits?: "px"| "em";
+  description?: string;
+  pixelated?: boolean; // Whether the image should scale to parent container
+  imageRendering?: 'auto' | 'pixelated' | 'crisp-edges';
+  appearance?: 'auto' | 'monochrome';
+  background?: boolean;
+  collapsed?: boolean;
+  collapsible?: boolean;
 }
+export type HTMLTag = ImageOptions | BaseHTMLTag
+export type HTMLContent = string | HTMLTag | HTMLContent[];
+export type Definition = HTMLContent | StructuredDefinition;

@@ -1,30 +1,76 @@
 import { ArgumentParser } from 'argparse';
-import fsExtra from 'fs-extra';
+import fsExtra, { copy } from 'fs-extra';
 import * as _ from 'lodash';
 import path from 'path';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
 import { KindleDictEntry, kindleEntriesToXHtml, KindleInflection, yomichanEntryToKindle } from './utils/kindle-dict-entry';
+import { Definition, } from './yomichan/yomichan-types';
+import { hasOwnProperty } from './utils/hasOwnProperty';
+import { path_fix } from './utils/kindle-dict-entry';
+import { exec, spawn } from 'child_process';
+import util from 'util';
 
+const execa = util.promisify(exec);
+function copyPath(input: string, output: string, opath: string, convert: boolean): Promise<any>{
+  const fixed_path = path_fix(opath)
+  if (convert && fixed_path != opath) {
+    const ip = path.join(input, opath)
+    const op = path.join(output, fixed_path)
+    const command = `convert ${ip} -background white -alpha remove ${op}`
+    // TODO make the directory w/o copying anything
+    return fsExtra.copy(path.join(input, opath), path.join(output, opath)).then(_ => execa(command))
+  } else {
+    return fsExtra.copy(path.join(input, opath), path.join(output, opath));
+  }
+}
+
+function copyDef(input:string, output: string, def: Definition | Definition[], convert:boolean, cache: Set<string>) : Array<Promise<any>> {
+  const ret: Array<Promise<any>> = [];
+  if (Array.isArray(def)) {
+    for (const i of def)
+      ret.push(...copyDef(input, output, i, convert, cache))
+  } else if (typeof def === 'string') { 
+
+  } else if (hasOwnProperty(def, 'content')) {
+    ret.push(...copyDef(input, output, def.content, convert, cache))
+  } else if (hasOwnProperty(def, 'path')) {
+    if (!cache.has(def.path)){
+      ret.push(copyPath(input, output, def.path, convert))
+      cache.add(def.path)
+    }
+  }
+  return ret
+}
 
 async function main(args: Partial<{
+
   input: string;
   output: string;
   title: string;
   author: string;
   debug: boolean;
+  conjugation: boolean;
+  no_img_conv: boolean;
 }>) {
   if (!args.input || !args.output || !args.title) {
     parser.print_help();
     return;
   }
+  const input: string = args.input;
+  const output: string = args.output;
   let yomiEntries = await loadDict(args.input);
 
   yomiEntries = yomiEntries.sort((a, b) => b.frequency - a.frequency);
 
   let kindleEntries: KindleDictEntry[] = [];
+  const convert_img = args.no_img_conv === undefined ? true : !args.no_img_conv;
+  const cache = new Set<string>()
   for (const yomiEntry of yomiEntries) {
-    kindleEntries.push(yomichanEntryToKindle(yomiEntry));
+    kindleEntries.push(yomichanEntryToKindle(yomiEntry, true, args.conjugation || false));
+    const res = yomiEntry.definitions.map(x => copyDef(input, output, x, convert_img, cache));
+    for (const i of res.flat())
+      await i;
   }
   const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
   kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
@@ -58,7 +104,7 @@ async function main(args: Partial<{
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
 
-  const chunkedKindleEntries = _.chunk(kindleEntries, 100);
+  const chunkedKindleEntries = _.chunk(kindleEntries, 50000);
   for (let i = 0; i < chunkedKindleEntries.length; i += 1) {
     const doc = kindleEntriesToXHtml(chunkedKindleEntries[i]);
     const outputFilename = `entries-${i}.html`;
@@ -124,6 +170,7 @@ parser.add_argument('-i', '--input', { help: 'Input directory' });
 parser.add_argument('-o', '--output', { help: 'Output directory' });
 parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });
 parser.add_argument('-a', '--author', { help: 'Author' });
+parser.add_argument('--conjugation', { const: true, action: 'store_const', help: 'Also include other conjugations' })
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
-
+parser.add_argument('--no-img-conv', { const: true, action: 'store_const', help: 'Also include other conjugations' })
 main(parser.parse_args());
