@@ -316,6 +316,11 @@ function generateInflections(data: { term: string; inflectionRule: string; origT
             name: '仮定形',
             value: word.replace(/い$/u, 'けれ'),
           });
+          // Need this if the original contains し/しく entry but we want modern usage
+          inflections.push({
+            name: '派生',
+            value: word.replace(/い$/u, ''),
+          });
         };
         pushIAdjectiveGeneralInflections(term);
         break;
