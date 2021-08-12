@@ -9,6 +9,8 @@ import { Definition, } from './yomichan/yomichan-types';
 import { hasOwnProperty } from './utils/hasOwnProperty';
 import { path_fix } from './utils/kindle-dict-entry';
 import { exec, spawn } from 'child_process';
+import { mergeDictData } from './utils/merge-dict-data';
+
 import util from 'util';
 
 const execa = util.promisify(exec);
@@ -43,14 +45,25 @@ function copyDef(input:string, output: string, def: Definition | Definition[], c
   return ret
 }
 
+// For unsupported characters (personal use)
+function customReplacements(value: string) {
+  value = value.replace(/1️⃣/g, '<b>[一]</b>');
+  value = value.replace(/2️⃣/g, '<b>[二]</b>');
+  value = value.replace(/3️⃣/g, '<b>[三]</b>');
+  value = value.replace(/4️⃣/g, '<b>[四]</b>');
+  value = value.replace(/5️⃣/g, '<b>[五]</b>');
+  value = value.replace(/6️⃣/g, '<b>[六]</b>');
+  return value;
+}
+
 async function main(args: Partial<{
 
   input: string;
   output: string;
   title: string;
   author: string;
+  main_dict: string;
   debug: boolean;
-  conjugation: boolean;
   no_img_conv: boolean;
 }>) {
   if (!args.input || !args.output || !args.title) {
@@ -60,41 +73,40 @@ async function main(args: Partial<{
   const input: string = args.input;
   const output: string = args.output;
   let yomiEntries = await loadDict(args.input);
-
+  console.log('loaded dict')
+  args.no_img_conv && console.log("image convertion: ", !args.no_img_conv)
+  if (args.main_dict) {
+    yomiEntries = await mergeDictData(yomiEntries, args.main_dict);
+  }
+  
   yomiEntries = yomiEntries.sort((a, b) => b.frequency - a.frequency);
 
   let kindleEntries: KindleDictEntry[] = [];
   const convert_img = args.no_img_conv === undefined ? true : !args.no_img_conv;
   const cache = new Set<string>()
+  let waits: Promise<any>[] = []
   for (const yomiEntry of yomiEntries) {
-    kindleEntries.push(yomichanEntryToKindle(yomiEntry, true, args.conjugation || false));
+    kindleEntries.push(yomichanEntryToKindle(yomiEntry, true));
     const res = yomiEntry.definitions.map(x => copyDef(input, output, x, convert_img, cache));
-    for (const i of res.flat())
-      await i;
+    waits.push(...res.flat())
+    if (waits.length > 1000){
+      await Promise.all(waits)
+      waits = []
+    }
   }
+  await Promise.all(waits)
+  waits = []
+
   const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
   kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
-    let mergedInflections: KindleInflection[] = [];
-    for (const kindleEntry of similarKindleEntries) {
-      if (kindleEntry.hiddenLabel) {
-        mergedInflections.push({
-          name: '書き方',
-          value: kindleEntry.hiddenLabel,
-        });
-      }
-      mergedInflections.push(...kindleEntry.inflections);
-    }
-    mergedInflections = _.uniqBy(mergedInflections, (inf) => inf.value)
-      .filter((inf) => inf.value !== similarKindleEntries[0].hiddenLabel);
+    const mergedSearchDataList = similarKindleEntries.flatMap((x) => x.searchDataList);
 
     return {
       headword: similarKindleEntries[0].headword,
-      hiddenLabel: similarKindleEntries[0].hiddenLabel,
-      inflections: mergedInflections,
+      searchDataList: _.uniqBy(mergedSearchDataList, (x) => x.term),
       definition: similarKindleEntries[0].definition,
     };
-  })
-
+  });
 
   const contents: {
     id: string;
@@ -103,8 +115,8 @@ async function main(args: Partial<{
 
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
-
   const chunkedKindleEntries = _.chunk(kindleEntries, 50000);
+  console.log("writing html files")
   for (let i = 0; i < chunkedKindleEntries.length; i += 1) {
     const doc = kindleEntriesToXHtml(chunkedKindleEntries[i]);
     const outputFilename = `entries-${i}.html`;
@@ -112,7 +124,9 @@ async function main(args: Partial<{
       id: `entries-${i}`,
       filename: outputFilename,
     });
-    fsExtra.writeFileSync(path.join(outputDir, outputFilename), doc.end({ prettyPrint: args.debug }));
+    let value = doc.end({ prettyPrint: args.debug });
+    value = customReplacements(value);
+    fsExtra.writeFileSync(path.join(outputDir, outputFilename), value);
 
     console.log(`Progress: ${i}/${chunkedKindleEntries.length} (${(i / chunkedKindleEntries.length * 100).toFixed(2)}%)`);
   }
@@ -159,6 +173,7 @@ async function main(args: Partial<{
   fsExtra.writeFileSync(path.join(outputDir, `${args.title}.opf`), opfXml.end( {
     prettyPrint: args.debug,
   }));
+  
 }
 
 
@@ -170,7 +185,7 @@ parser.add_argument('-i', '--input', { help: 'Input directory' });
 parser.add_argument('-o', '--output', { help: 'Output directory' });
 parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });
 parser.add_argument('-a', '--author', { help: 'Author' });
-parser.add_argument('--conjugation', { const: true, action: 'store_const', help: 'Also include other conjugations' })
+parser.add_argument('-m', '--main_dict', { help: 'Main dictionary to use as reference (for alt writing and frequency)' });
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
 parser.add_argument('--no-img-conv', { const: true, action: 'store_const', help: 'Also include other conjugations' })
 main(parser.parse_args());

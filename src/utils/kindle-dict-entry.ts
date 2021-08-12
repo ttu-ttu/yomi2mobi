@@ -11,10 +11,14 @@ export interface KindleInflection {
   value: string;
 }
 
+export interface KindleSearchData {
+  term: string;
+  inflections: KindleInflection[];
+}
+
 export interface KindleDictEntry {
   headword: string;
-  hiddenLabel?: string;
-  inflections: KindleInflection[];
+  searchDataList: KindleSearchData[];
   definition: XMLBuilder[];
 }
 
@@ -49,7 +53,7 @@ function structuredContentItemToHtmlText(item: Definition): XMLBuilder {
 }
 const img_saved_prop = ['path', 'description', 'width', 'height', 'style', 'collapsible', 'pixelated', 'imageRendering']
 export function path_fix(path: string){
-  if (path.endsWith('gif') || path.endsWith('tiff')) {
+  if (path.endsWith('gif') || path.endsWith('tiff') || path.endsWith('webp')) {
     let npath = path.split('.');
     npath[npath.length - 1] = 'png'
     return npath.join('.')
@@ -178,78 +182,66 @@ function convertToDan(changingKana: string, newDan: 'あ' | 'い' | 'う' | 'え
   }
 }
 
-const godanTeFormTable: [RegExp, string][] = [
-  [/[うつる]$/u, 'って'], 
-  [/す$/u, 'して'],
-  [/く$/u, 'いて'],
-  [/ぐ$/u, 'いで'],
-  [/[ぶむぬ]$/u, 'んで']];
 
-const ichidanTeFormTable: [RegExp, string][] = [[/る$/u, 'て']];
 
-function applyTeForm(word: string, table: [RegExp, string][], inflections: KindleInflection[]) {
-  for (const [re, c] of table){
-    if (re.test(word)){
-      inflections.push({
-        name: 'て形',
-        value: word.replace(re, c)
-      });
-      break;
-    }
-  }
+function generateJiruZuruInflections(term: string) {
+  const inflections: KindleInflection[] = [];
+  inflections.push({
+    name: '未然形・連用形',
+    value: term.replace(/[ずじ]る$/u, 'じ'),
+  });
+  inflections.push({
+    name: '未然形',
+    value: term.replace(/[ずじ]る$/u, 'ぜ'),
+  });
+  inflections.push({
+    name: '未然形',
+    value: term.replace(/[ずじ]る$/u, 'ざ'),
+  });
+  inflections.push({
+    name: '終止形・連体形',
+    value: term.replace(/[ずじ]る$/u, 'ずる'),
+  });
+  inflections.push({
+    name: '終止形・連体形',
+    value: term.replace(/[ずじ]る$/u, 'じる'),
+  });
+  inflections.push({
+    name: '終止形・連体形',
+    value: term.replace(/[ずじ]る$/u, 'ず'),
+  });
+  inflections.push({
+    name: '仮定形',
+    value: term.replace(/[ずじ]る$/u, 'ずれ'),
+  });
+  inflections.push({
+    name: '仮定形',
+    value: term.replace(/[ずじ]る$/u, 'じれ'),
+  });
+  inflections.push({
+    name: '命令形',
+    value: term.replace(/[ずじ]る$/u, 'じろ'),
+  });
+  inflections.push({
+    name: '命令形',
+    value: term.replace(/[ずじ]る$/u, 'じよ'),
+  });
+  inflections.push({
+    name: '命令形',
+    value: term.replace(/[ずじ]る$/u, 'ぜよ'),
+  });
+  return inflections.filter((inf) => inf.value !== term);
 }
 
-export function yomichanEntryToKindle(yomiEntry: YomichanEntry, 
-  firstLineAsHeadword = true, econ = true): KindleDictEntry {
-  let headword = yomiEntry.term;
-  // const processedDefinitions: string[] = [];
-  let updatedDefinitions = yomiEntry.definitions;
-
-  // if (firstLineAsHeadword && yomiEntry.definitions[0]) {
-  //   const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0]);
-  //   const firstDefinitionSplit = firstDefinition.first();
-  //   const headerString = firstDefinitionSplit[0];
-  //   headword = headerString;
-  //   processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
-  //   updatedDefinitions = yomiEntry.definitions.slice(1);
-  // }
-
-  let inflections: KindleInflection[] = [];
-
-  inflections.push({
-    name: '読み方',
-    value: toHiragana(yomiEntry.term),
-  });
-  inflections.push({
-    name: '読み方',
-    value: toKatakana(yomiEntry.term),
-  });
-  inflections.push({
-    name: '読み方',
-    value: toHiragana(yomiEntry.reading),
-  });
-  inflections.push({
-    name: '読み方',
-    value: toKatakana(yomiEntry.reading),
-  });
-
-
-  for (let i = 0; i < yomiEntry.term.length - 1; i++) {
-    let w =  Array.from(yomiEntry.term);
-    if (yomiEntry.term[i] == yomiEntry.term[i + 1]) {
-      w[i + 1] = '々'
-      inflections.push({
-        name: '踊り字',
-        value: w.join(''),
-      });
-      w[i + 1] = w[i]
-    }
-  }
-
-  for (const yomiInflection of yomiEntry.inflectionRule.split(' ')) {
+function generateInflections(data: { term: string; inflectionRule: string; origTerm: string }) {
+  const { term, inflectionRule, origTerm } = data;
+  const inflections: KindleInflection[] = [];
+  
+  for (const yomiInflection of inflectionRule.split(' ')) {
+    // Common inflections
     switch (yomiInflection) {
       case InflectionRuleEnum.Godan: {
-        if (/[うくすつぬふむるぐずづぶぷ]$/.test(yomiEntry.term)) {
+        if (/[うくすつぬふむるぐずづぶぷ]$/.test(term)) {
           const pushGodanGeneralInflections = (word: string) => {
             if (word.length === 0) {
               return;
@@ -282,50 +274,33 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry,
           };
           
 
-          if (/[うつる]|(行く)$/.test(yomiEntry.term)) {
+          const termBrokenDown = Array.from(term);
+          const iForm = convertToDan(termBrokenDown.slice(-1)[0], 'い');
+          if (iForm) {
             inflections.push({
               name: '連用形',
-              value: yomiEntry.term.replace(/.$/u, 'っ'),
+              value: term.replace(/.$/u, iForm),
             });
-            inflections.push({
-              name: '連用形',
-              value: yomiEntry.reading.replace(/.$/u, 'っ'),
-            });
-            econ && inflections.push({
-              name: 'て形',
-              value: yomiEntry.term.replace(/.$/u, 'って')
-            });
-            econ && inflections.push({
-              name: 'て形',
-              value: yomiEntry.reading.replace(/.$/u, 'って')
-            });
-          } else if (/[ぬぶ]$/.test(yomiEntry.term)) {
-            inflections.push({
-              name: '連用形',
-              value: yomiEntry.term.replace(/.$/u, 'ん'),
-            });
-            inflections.push({
-              name: '連用形',
-              value: yomiEntry.reading.replace(/.$/u, 'ん'),
-            });
-          } else {
-            const termBrokenDown = Array.from(yomiEntry.term);
-            const iForm = convertToDan(termBrokenDown.slice(-1)[0], 'い');
-            if (iForm) {
-              inflections.push({
-                name: '連用形',
-                value: yomiEntry.term.replace(/.$/u, iForm),
-              });
-              inflections.push({
-                name: '連用形',
-                value: yomiEntry.reading.replace(/.$/u, iForm),
-              });
-            }
-            econ && applyTeForm(yomiEntry.reading, godanTeFormTable, inflections);
-            econ && applyTeForm(yomiEntry.term, godanTeFormTable, inflections);
           }
-          pushGodanGeneralInflections(yomiEntry.term);
-          pushGodanGeneralInflections(yomiEntry.reading);
+          
+          if (/[くぐ]$/.test(term)) {
+            inflections.push({
+              name: '連用形',
+              value: term.replace(/.$/u, 'い'),
+            });
+
+          } else if (/[うつる]$/.test(term) || /行く$/.test(origTerm)) {
+            inflections.push({
+              name: '連用形',
+              value: term.replace(/.$/u, 'っ'),
+            });
+          } else if (/[ぬぶむ]$/.test(term)) {
+            inflections.push({
+              name: '連用形',
+              value: term.replace(/.$/u, 'ん'),
+            });
+          }
+          pushGodanGeneralInflections(term);
         }
         break;
       }
@@ -347,11 +322,8 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry,
             name: '命令形',
             value: word.replace(/る$/u, 'よ'),
           });
-
-          applyTeForm(word, ichidanTeFormTable, inflections);
         };
-        pushIchidanGeneralInflections(yomiEntry.term);
-        pushIchidanGeneralInflections(yomiEntry.reading);
+        pushIchidanGeneralInflections(term);
         break;
       }
       case InflectionRuleEnum.Kuru: {
@@ -394,8 +366,7 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry,
             value: word.replace(/くる$/u, 'きて'),
           });
         };
-        pushKuruGeneralInflections(yomiEntry.term);
-        pushKuruGeneralInflections(yomiEntry.reading);
+        pushKuruGeneralInflections(term);
         break;
       }
       case InflectionRuleEnum.Suru: {
@@ -433,43 +404,11 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry,
             value: word.replace(/する$/u, 'して'),
           });
         };
-        pushSuruGeneralInflections(yomiEntry.term);
-        pushSuruGeneralInflections(yomiEntry.reading);
+        pushSuruGeneralInflections(term);
         break;
       }
       case InflectionRuleEnum.Zuru: {
-        const pushSuruGeneralInflections = (word: string) => {
-          inflections.push({
-            name: '未然形・連用形',
-            value: word.replace(/ずる$/u, 'じ'),
-          });
-          inflections.push({
-            name: '未然形',
-            value: word.replace(/ずる$/u, 'ぜ'),
-          });
-          inflections.push({
-            name: '未然形',
-            value: word.replace(/ずる$/u, 'ざ'),
-          });
-          inflections.push({
-            name: '終止形・連体形',
-            value: word.replace(/ずる$/u, 'ず'),
-          });
-          inflections.push({
-            name: '仮定形',
-            value: word.replace(/ずる$/u, 'ずれ'),
-          });
-          inflections.push({
-            name: '命令形',
-            value: word.replace(/ずる$/u, 'じろ'),
-          });
-          inflections.push({
-            name: '命令形',
-            value: word.replace(/ずる$/u, 'ぜよ'),
-          });
-        };
-        pushSuruGeneralInflections(yomiEntry.term);
-        pushSuruGeneralInflections(yomiEntry.reading);
+        inflections.push(...generateJiruZuruInflections(term));
         break;
       }
       case InflectionRuleEnum.IAdjective: {
@@ -491,20 +430,84 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry,
             value: word.replace(/い$/u, 'けれ'),
           });
         };
-        pushIAdjectiveGeneralInflections(yomiEntry.term);
-        pushIAdjectiveGeneralInflections(yomiEntry.reading);
+        pushIAdjectiveGeneralInflections(term);
         break;
+      }
+    }
+
+    // Custom inflections
+    if (/じる$/.test(term)) {
+      // 投じる -> 投ずる
+      switch (yomiInflection) {
+        case InflectionRuleEnum.Ichidan:
+        case InflectionRuleEnum.Godan:
+        case InflectionRuleEnum.Zuru: {
+          inflections.push(...generateJiruZuruInflections(term));
+          break;
+        }
+      }
+    } else if (/ずる$/.test(term)) {
+      // 投ずる -> 投じる
+      switch (yomiInflection) {
+        case InflectionRuleEnum.Ichidan:
+        case InflectionRuleEnum.Godan:
+        case InflectionRuleEnum.Zuru: {
+          inflections.push(...generateJiruZuruInflections(term));
+          break;
+        }
       }
     }
   }
 
-  inflections = _.uniqBy(inflections, (inf) => inf.value)
-    .filter((inf) => inf.value !== yomiEntry.term && inf.value.length);
+  return _.uniqBy(inflections, (inf) => inf.value)
+    .filter((inf) => inf.value !== term && inf.value.length);
+}
+
+export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword = true): KindleDictEntry {
+  let headword = yomiEntry.term;
+  const processedDefinitions: string[] = [];
+  let updatedDefinitions = yomiEntry.definitions;
+
+  // if (firstLineAsHeadword && yomiEntry.definitions[0]) {
+  //   const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0]);
+  //   const firstDefinitionSplit = firstDefinition.split('\n');
+  //   const headerString = firstDefinitionSplit[0];
+  //   headword = headerString;
+  //   processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
+  //   updatedDefinitions = yomiEntry.definitions.slice(1);
+  // }
+
+  let searchDataList: KindleSearchData[] = [
+    yomiEntry.term,
+    yomiEntry.reading,
+  ].filter((term) => !!term)
+  .map((term) => ({
+    term,
+    inflections: [],
+  }));
+
+  for (let i = 0; i < yomiEntry.term.length - 1; i++) {
+    let term = Array.from(yomiEntry.term);
+    if (yomiEntry.term[i] === yomiEntry.term[i + 1] && /(\p{Unified_Ideograph})/u.test(yomiEntry.term[i])) {
+      term[i + 1] = '々';
+      searchDataList.push({
+        term: term.join(''),
+        inflections: [],
+      });
+    }
+  }
+
+  for (const searchData of searchDataList) {
+    searchData.inflections = generateInflections({
+      term: searchData.term,
+      inflectionRule: yomiEntry.inflectionRule,
+      origTerm: yomiEntry.term,
+    });
+  }
 
   return {
     headword: headword,
-    hiddenLabel: yomiEntry.term,
-    inflections,
+    searchDataList: _.uniqBy(searchDataList, (x) => x.term),
     definition: [
       // ...processedDefinitions,
       ...updatedDefinitions.map((d) => yomichanDefinitionToHtmlText(d)),
@@ -520,24 +523,45 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
         name: 'japanese',
         scriptable: 'yes',
       })
-      .ele('idx:short')
-      .ele('idx:orth', {
-        value: kindleEntry.hiddenLabel,
-      }).ele('b').txt(kindleEntry.headword).up().up();
+      .ele('idx:short');
 
-    if (kindleEntry.inflections.length) {
-      for (const inflection of kindleEntry.inflections) {
-        xmlEntry = xmlEntry.ele('idx:orth', {
-          value: inflection.value, 
-        }).up();
+    const possibleForms: string[] = [];
+    for (const searchData of kindleEntry.searchDataList) {
+      possibleForms.push(searchData.term);
+
+// <<<<<<< HEAD
+//     if (kindleEntry.inflections.length) {
+//       for (const inflection of kindleEntry.inflections) {
+//         xmlEntry = xmlEntry.ele('idx:orth', {
+//           value: inflection.value, 
+//         }).up();
+//       }
+//     }
+
+//     xmlEntry = xmlEntry.ele('p', {style: 'text-indent: 0;'});
+//     for (let i = 0; i < kindleEntry.definition.length; i++) {
+//       if (i > 0)
+// =======
+      // Treat inflections as new writing as idx:infl doesn't deinflect 敗北 -> 敗北る
+      for (const inflection of searchData.inflections) {
+        possibleForms.push(inflection.value);
       }
     }
 
-    xmlEntry = xmlEntry.ele('p', {style: 'text-indent: 0;'});
-    for (let i = 0; i < kindleEntry.definition.length; i++) {
-      if (i > 0)
+    for (const value of _.uniq(possibleForms)) {
+      xmlEntry = xmlEntry.ele('idx:orth', {
+        value: value,
+      }).up();
+    }
+
+    xmlEntry = xmlEntry.ele('b').txt(kindleEntry.headword).up();
+
+    xmlEntry = xmlEntry.ele('div');
+    const defs = kindleEntry.definition
+    for (let i = 0; i < defs.length; i += 1) {
+      if (i > 0) 
         xmlEntry = xmlEntry.ele('br').up();
-      xmlEntry = xmlEntry.import(kindleEntry.definition[i]);
+      xmlEntry = xmlEntry.import(defs[i]);
     }
     xmlEntry = xmlEntry.up();
     xmlEntries.push(xmlEntry);
