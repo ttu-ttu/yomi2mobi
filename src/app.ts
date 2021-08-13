@@ -1,5 +1,5 @@
 import { ArgumentParser } from 'argparse';
-import fsExtra, { copy } from 'fs-extra';
+import fsExtra, { copy, mkdirSync } from 'fs-extra';
 import * as _ from 'lodash';
 import path from 'path';
 import { fragment } from 'xmlbuilder2';
@@ -8,41 +8,59 @@ import { KindleDictEntry, kindleEntriesToXHtml, KindleInflection, yomichanEntryT
 import { Definition, } from './yomichan/yomichan-types';
 import { hasOwnProperty } from './utils/hasOwnProperty';
 import { path_fix } from './utils/kindle-dict-entry';
-import { exec, spawn } from 'child_process';
+
+
 import { mergeDictData } from './utils/merge-dict-data';
-
 import util from 'util';
+import { spawn } from 'child_process';
+import { mkdir } from 'fs/promises';
 
-const execa = util.promisify(exec);
-function copyPath(input: string, output: string, opath: string, convert: boolean): Promise<any>{
+function spawna(cmd: string, args: string[] = []): Promise<any> {
+  return new Promise(function (resolve, reject) {
+    const process = spawn(cmd, args);
+    process.on('close', function (code) { // Should probably be 'exit', not 'close'
+      resolve(code);
+    });
+    process.on('error', function (err) {
+      reject(err);
+    });
+  })
+}
+function copyPath(input: string, output: string, opath: string, convert: boolean, cache: Set<string>): Promise<any>{
   const fixed_path = path_fix(opath)
+  const ip = path.join(input, opath)
+  let op = path.join(output, opath)
+  const root_dir = path.dirname(op)
+  console.log(ip)
+  if (!cache.has(root_dir)){
+    mkdirSync(root_dir, { recursive: true })
+    console.log(root_dir)
+    cache.add(root_dir)
+  } 
   if (convert && fixed_path != opath) {
-    const ip = path.join(input, opath)
-    const op = path.join(output, fixed_path)
-    const command = `convert ${ip} -background white -alpha remove ${op}`
-    // TODO make the directory w/o copying anything
-    return fsExtra.copy(path.join(input, opath), path.join(output, opath)).then(_ => execa(command))
+    op = path.join(output, fixed_path)
+    
+    return spawna('convert', [ip, '-background', 'white', '-alpha', 'remove', op])
   } else {
-    return fsExtra.copy(path.join(input, opath), path.join(output, opath));
+    return fsExtra.copy(ip, op);
   }
 }
 
-function copyDef(input:string, output: string, def: Definition | Definition[], convert:boolean, cache: Set<string>) : Array<Promise<any>> {
-  const ret: Array<Promise<any>> = [];
+function copyDef(input:string, output: string, def: Definition | Definition[], convert:boolean, cache: Set<string>): Promise<any>[]{
   if (Array.isArray(def)) {
-    for (const i of def)
-      ret.push(...copyDef(input, output, i, convert, cache))
+    return def.map(i => copyDef(input, output, i, convert, cache)).flat()
   } else if (typeof def === 'string') { 
-
+    return []
   } else if (hasOwnProperty(def, 'content')) {
-    ret.push(...copyDef(input, output, def.content, convert, cache))
+    return copyDef(input, output, def.content, convert, cache)
   } else if (hasOwnProperty(def, 'path')) {
     if (!cache.has(def.path)){
-      ret.push(copyPath(input, output, def.path, convert))
+      const a = copyPath(input, output, def.path, convert, cache)
       cache.add(def.path)
+      return [a]
     }
-  }
-  return ret
+  } 
+  return []
 }
 
 // For unsupported characters (personal use)
@@ -84,18 +102,17 @@ async function main(args: Partial<{
   let kindleEntries: KindleDictEntry[] = [];
   const convert_img = args.no_img_conv === undefined ? true : !args.no_img_conv;
   const cache = new Set<string>()
-  let waits: Promise<any>[] = []
+  let backlog : Promise<any>[] = [];
   for (const yomiEntry of yomiEntries) {
     kindleEntries.push(yomichanEntryToKindle(yomiEntry, true));
     const res = yomiEntry.definitions.map(x => copyDef(input, output, x, convert_img, cache));
-    waits.push(...res.flat())
-    if (waits.length > 1000){
-      await Promise.all(waits)
-      waits = []
+    backlog.push(...res.flat())
+    if (backlog.length > 100){
+      await Promise.all(backlog)
+      backlog = []
     }
   }
-  await Promise.all(waits)
-  waits = []
+  await Promise.all(backlog)
 
   const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
   kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
@@ -103,6 +120,7 @@ async function main(args: Partial<{
 
     return {
       headword: similarKindleEntries[0].headword,
+      boldHeadWord: similarKindleEntries[0].boldHeadWord,
       searchDataList: _.uniqBy(mergedSearchDataList, (x) => x.term),
       definition: similarKindleEntries[0].definition,
     };
@@ -115,7 +133,7 @@ async function main(args: Partial<{
 
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
-  const chunkedKindleEntries = _.chunk(kindleEntries, 50000);
+  const chunkedKindleEntries = _.chunk(kindleEntries, 1000);
   console.log("writing html files")
   for (let i = 0; i < chunkedKindleEntries.length; i += 1) {
     const doc = kindleEntriesToXHtml(chunkedKindleEntries[i]);
@@ -189,3 +207,5 @@ parser.add_argument('-m', '--main_dict', { help: 'Main dictionary to use as refe
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
 parser.add_argument('--no-img-conv', { const: true, action: 'store_const', help: 'Also include other conjugations' })
 main(parser.parse_args());
+
+

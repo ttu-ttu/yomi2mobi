@@ -5,6 +5,7 @@ import { Definition, ImageDefinition, ImageOptions, InflectionRuleEnum, HTMLCont
 import { toHiragana, toKatakana } from './kana-transformations';
 import { hasOwnProperty } from './hasOwnProperty';
 import * as _ from 'lodash';
+import { head, isLength } from 'lodash';
 
 export interface KindleInflection {
   name: string;
@@ -18,42 +19,57 @@ export interface KindleSearchData {
 
 export interface KindleDictEntry {
   headword: string;
+  boldHeadWord: boolean;
   searchDataList: KindleSearchData[];
   definition: XMLBuilder[];
 }
 
 
-function structuredContentItemToHtmlText(item: Definition): XMLBuilder {
+function structuredContentItemToHtmlText(item: Definition, headword: boolean): [XMLBuilder, boolean] {
   let f = fragment();
   if (item === undefined) {
-    return stringToXML('undef')
+    return [f, false]
   } else if (typeof item === 'string') {
-    for (const ss of item.split('\n')){
+    if (item.trim().length == 0)
+      return [f, false]
+    const [head, ...tail] = item.split('\n').map(x => x.trim()).filter(x => x.length > 0)
+    if (headword) {
+      f = f.ele('b').txt(head).up().ele('br').up()
+    } else {
+      f = f.txt(head).ele('br').up()
+    }
+    for (const ss of tail){
       f = f.txt(ss).ele('br').up()
     }
-    return f;
+    return [f, headword];
   } else if (Array.isArray(item)) {
-    const subs = item.map((subItem) => structuredContentItemToHtmlText(subItem));
+    const [head, ...tail] = item
+    const [fi, status] = structuredContentItemToHtmlText(head, headword)
+    f.import(fi)
+    const subs = tail.map((subItem) => structuredContentItemToHtmlText(subItem, false)[0]);
     for (const i of subs) {
       f = f.import(i)
     }
-    return f
+    return [f, status]
   }
   
   if (hasOwnProperty(item, 'tag')){
     if (item.tag == 'img' && hasOwnProperty(item, 'path')) {
-      return imgToXML(item)
+      return [imgToXML(item), false]
     } else {
-      return tagToXML(item)
+      // TODO fix
+      return [tagToXML(item), false]
     }
   }
   if (hasOwnProperty(item, 'type') && item.type == 'structured-content') 
-    return structuredContentItemToHtmlText(item.content);
-  return f
+    return structuredContentItemToHtmlText(item.content, false);
+  return [f, false]
 }
 const img_saved_prop = ['path', 'description', 'width', 'height', 'style', 'collapsible', 'pixelated', 'imageRendering']
 export function path_fix(path: string){
-  if (path.endsWith('gif') || path.endsWith('tiff') || path.endsWith('webp')) {
+  if (path.endsWith('gif') || path.endsWith('tiff') 
+  //|| path.endsWith('webp')
+  ) {
     let npath = path.split('.');
     npath[npath.length - 1] = 'png'
     return npath.join('.')
@@ -118,10 +134,10 @@ function tagToXML(item: HTMLTag): XMLBuilder {
 
   f = f.ele(item.tag, conf)
   if (Array.isArray(item.content)) {
-    for (const i of item.content.map(structuredContentItemToHtmlText))
+    for (const i of item.content.map(x => structuredContentItemToHtmlText(x, false)[0]))
       f = f.import(i)
   } else if (item.content != undefined) {
-    f = f.import(structuredContentItemToHtmlText(item.content))
+    f = f.import(structuredContentItemToHtmlText(item.content, false)[0])
   }
   return f
   
@@ -139,8 +155,8 @@ function stringToXML(s: string): XMLBuilder {
 }
 
 
-function yomichanDefinitionToHtmlText(definition: Definition): XMLBuilder {
-  return structuredContentItemToHtmlText(definition);
+function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean): [XMLBuilder, boolean] {
+  return structuredContentItemToHtmlText(definition, headword);
 }
 
 function convertToDan(changingKana: string, newDan: 'あ' | 'い' | 'う' | 'え' | 'お') {
@@ -468,14 +484,14 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
   const processedDefinitions: string[] = [];
   let updatedDefinitions = yomiEntry.definitions;
 
-  // if (firstLineAsHeadword && yomiEntry.definitions[0]) {
-  //   const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0]);
+  if (firstLineAsHeadword && yomiEntry.definitions[0]) {
+    const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0], true);
   //   const firstDefinitionSplit = firstDefinition.split('\n');
   //   const headerString = firstDefinitionSplit[0];
   //   headword = headerString;
   //   processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
   //   updatedDefinitions = yomiEntry.definitions.slice(1);
-  // }
+  }
 
   let searchDataList: KindleSearchData[] = [
     yomiEntry.term,
@@ -504,14 +520,20 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
       origTerm: yomiEntry.term,
     });
   }
-
+  let definition: XMLBuilder[] = []
+  let boldHeadWord = true
+  if (updatedDefinitions.length > 0) {
+    const [head, ...tail] = updatedDefinitions
+    const [firstDef, stat] = yomichanDefinitionToHtmlText(head, firstLineAsHeadword)
+    boldHeadWord = !stat
+    definition.push(firstDef)
+    definition.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false)[0]))
+  }
   return {
-    headword: headword,
+    headword,
+    boldHeadWord,
     searchDataList: _.uniqBy(searchDataList, (x) => x.term),
-    definition: [
-      // ...processedDefinitions,
-      ...updatedDefinitions.map((d) => yomichanDefinitionToHtmlText(d)),
-    ],
+    definition,
   }
 }
 
@@ -554,7 +576,8 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
       }).up();
     }
 
-    xmlEntry = xmlEntry.ele('b').txt(kindleEntry.headword).up();
+    if (kindleEntry.boldHeadWord)
+      xmlEntry = xmlEntry.ele('b').txt(kindleEntry.headword).up();
 
     xmlEntry = xmlEntry.ele('div');
     const defs = kindleEntry.definition
