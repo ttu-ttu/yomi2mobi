@@ -5,7 +5,7 @@ import path from 'path';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
 import { KindleDictEntry, kindleEntriesToXHtml, KindleInflection, yomichanEntryToKindle } from './utils/kindle-dict-entry';
-import { Definition, } from './yomichan/yomichan-types';
+import { Definition, StructuredContentItem } from './yomichan/yomichan-types';
 import { hasOwnProperty } from './utils/hasOwnProperty';
 import { path_fix } from './utils/kindle-dict-entry';
 
@@ -36,31 +36,37 @@ function copyPath(input: string, output: string, opath: string, convert: boolean
     mkdirSync(root_dir, { recursive: true })
     console.log(root_dir)
     cache.add(root_dir)
-  } 
+  }
   if (convert && fixed_path != opath) {
     op = path.join(output, fixed_path)
-    
+
     return spawna('convert', [ip, '-background', 'white', '-alpha', 'remove', op])
   } else {
     return fsExtra.copy(ip, op);
   }
 }
 
-function copyDef(input:string, output: string, def: Definition | Definition[], convert:boolean, cache: Set<string>): Promise<any>[]{
-  if (Array.isArray(def)) {
-    return def.map(i => copyDef(input, output, i, convert, cache)).flat()
-  } else if (typeof def === 'string') { 
-    return []
-  } else if (hasOwnProperty(def, 'content')) {
-    return copyDef(input, output, def.content, convert, cache)
-  } else if (hasOwnProperty(def, 'path')) {
-    if (!cache.has(def.path)){
-      const a = copyPath(input, output, def.path, convert, cache)
-      cache.add(def.path)
-      return [a]
+function copyDefinitions(input:string, output: string, definitions: Definition[], convert:boolean, cache: Set<string>): Promise<any>[] {
+  const copySingleDef = (def: Definition | StructuredContentItem): Promise<any>[] => {
+    if (typeof def !== 'object') {
+      return [];
     }
-  } 
-  return []
+    if ('content' in def) {
+      if (Array.isArray(def.content)) {
+        return def.content.flatMap(copySingleDef);
+      }
+      return copySingleDef(def.content);
+    }
+    if ('path' in def) {
+      if (!cache.has(def.path)){
+        const a = copyPath(input, output, def.path, convert, cache)
+        cache.add(def.path)
+        return [a];
+      }
+    }
+    return [];
+  }
+  return definitions.flatMap(copySingleDef);
 }
 
 // For unsupported characters (personal use)
@@ -96,8 +102,6 @@ async function main(args: Partial<{
   if (args.main_dict) {
     yomiEntries = await mergeDictData(yomiEntries, args.main_dict);
   }
-  
-  yomiEntries = yomiEntries.sort((a, b) => b.frequency - a.frequency);
 
   let kindleEntries: KindleDictEntry[] = [];
   const convert_img = args.no_img_conv === undefined ? true : !args.no_img_conv;
@@ -105,8 +109,8 @@ async function main(args: Partial<{
   let backlog : Promise<any>[] = [];
   for (const yomiEntry of yomiEntries) {
     kindleEntries.push(yomichanEntryToKindle(yomiEntry, true));
-    const res = yomiEntry.definitions.map(x => copyDef(input, output, x, convert_img, cache));
-    backlog.push(...res.flat())
+    const res = copyDefinitions(input, output, yomiEntry.definitions, convert_img, cache);
+    backlog.push(...res)
     if (backlog.length > 100){
       await Promise.all(backlog)
       backlog = []
@@ -123,8 +127,11 @@ async function main(args: Partial<{
       boldHeadWord: similarKindleEntries[0].boldHeadWord,
       searchDataList: _.uniqBy(mergedSearchDataList, (x) => x.term),
       definition: similarKindleEntries[0].definition,
+      frequency: similarKindleEntries.map((x) => x.frequency).reduce((a, b) => Math.max(a, b)),
     };
   });
+
+  kindleEntries = kindleEntries.sort((a, b) => b.frequency - a.frequency);
 
   const contents: {
     id: string;
@@ -169,7 +176,7 @@ async function main(args: Partial<{
         .ele('DefaultLookupIndex').txt('japanese').up()
       .up()
     .up();
-  
+
   opfXml = opfXml.ele('manifest');
   for (const content of contents) {
     opfXml = opfXml.ele('item', {
@@ -179,7 +186,7 @@ async function main(args: Partial<{
     }).up();
   }
   opfXml = opfXml.up();
-  
+
   opfXml = opfXml.ele('spine');
   for (const content of contents) {
     opfXml = opfXml.ele('itemref', {
@@ -191,14 +198,14 @@ async function main(args: Partial<{
   fsExtra.writeFileSync(path.join(outputDir, `${args.title}.opf`), opfXml.end( {
     prettyPrint: args.debug,
   }));
-  
+
 }
 
 
 const parser = new ArgumentParser({
   description: 'Argparse example'
 });
- 
+
 parser.add_argument('-i', '--input', { help: 'Input directory' });
 parser.add_argument('-o', '--output', { help: 'Output directory' });
 parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });

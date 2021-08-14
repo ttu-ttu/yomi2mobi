@@ -1,6 +1,3 @@
-import _ from "lodash";
-import { hasOwnProperty } from "../utils/hasOwnProperty";
-
 type Term = string;
 type Reading = string;
 type DefinitionTag = string | null;
@@ -15,6 +12,7 @@ export enum InflectionRuleEnum {
 }
 export const specialInflectionRule = '情報なし';
 type Frequency = number;
+export type Definition = string | TextDefinition | ImageDefinition | StructuredDefinition;
 type SequenceNumber = number;  // same number = same entry if option is merge
 type Tag = string;
 
@@ -34,12 +32,11 @@ interface TextDefinition {
   text: string;
 }
 
-export interface ImageOptions {
+interface ImageOptions {
   path: string;
   width?: number;
   height?: number;
   title?: string;
-  sizeUnits?: "px"| "em";
   description?: string;
   pixelated?: boolean; // Whether the image should scale to parent container
   imageRendering?: 'auto' | 'pixelated' | 'crisp-edges';
@@ -55,32 +52,52 @@ export interface ImageDefinition extends ImageOptions {
 
 export interface StructuredDefinition {
   type: 'structured-content';
-  content: HTMLContent;
-}
-interface BaseHTMLTag {
-  tag: string;
-  style?: Record<string, any>;
-  content?: HTMLContent;
-  [x: string]: any
+  content: StructuredContentItem;
 }
 
+export type StructuredContentItem = string | StructuredContentItem[] | StructuredContentItemObject;
 
+export type StructuredContentItemObject = StructuredContentItemObjectBr |
+  StructuredContentItemObjectGeneric |
+  StructuredContentItemObjectTableItem |
+  StructuredContentItemObjectStylableGeneric |
+  StructuredContentItemObjectImage;
 
-export interface ImageOptions extends BaseHTMLTag{
+interface StructuredContentItemObjectBr {
+  tag: 'br';
+}
+
+interface StructuredContentItemObjectGeneric {
+  tag: 'ruby' | 'rt' | 'rp' | 'table' | 'thead' | 'tbody' | 'tfoot' | 'tr';
+  content: StructuredContentItem;
+}
+
+interface StructuredContentItemObjectTableItem {
+  tag: 'td' | 'th';
+  content: StructuredContentItem;
+  colSpan?: number;
+  rowSpan?: number;
+  style?: StructuredContentItemStyle;
+}
+
+interface StructuredContentItemObjectStylableGeneric {
+  tag: 'span' | 'div';
+  content: StructuredContentItem;
+  style?: StructuredContentItemStyle;
+}
+
+export interface StructuredContentItemObjectImage extends ImageOptions {
   tag: 'img';
-  path: string;
-  width?: number;
-  height?: number;
-  title?: string;
-  sizeUnits?: "px"| "em";
-  description?: string;
-  pixelated?: boolean; // Whether the image should scale to parent container
-  imageRendering?: 'auto' | 'pixelated' | 'crisp-edges';
-  appearance?: 'auto' | 'monochrome';
-  background?: boolean;
-  collapsed?: boolean;
-  collapsible?: boolean;
+  verticalAlign?: 'baseline' | 'sub' | 'super' | 'text-top' | 'text-bottom' | 'middle' | 'top' | 'bottom';
+  sizeUnits?: 'px' | 'em';
 }
-export type HTMLTag = ImageOptions | BaseHTMLTag
-export type HTMLContent = string | HTMLTag | HTMLContent[];
-export type Definition = HTMLContent | StructuredDefinition;
+
+export interface StructuredContentItemStyle {
+  fontStyle?: 'normal' | 'italic';
+  fontWeight?: 'normal' | 'bold';
+  fontSize?: 'xx-small' | 'x-small' | 'small' | 'medium' | 'large' | 'x-large' | 'xx-large' | 'xxx-large';
+  textDecorationLine?: StyleTextDecorationLine | StyleTextDecorationLine[];
+  verticalAlign?: 'baseline' | 'sub' | 'super' | 'text-top' | 'text-bottom' | 'middle' | 'top' | 'bottom';
+}
+
+type StyleTextDecorationLine = 'none' | 'underline' | 'overline' | 'line-through';
