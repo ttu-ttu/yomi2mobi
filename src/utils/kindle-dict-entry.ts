@@ -33,16 +33,16 @@ export interface KindleDictEntry {
 
 function stringDefinitionToHtmlText(item: string, headword: boolean): [XMLBuilder, boolean] {
   let f = fragment();
-  if (item.trim().length == 0)
-    return [f, false]
-  const [head, ...tail] = item.split('\n').map(x => x.trim()).filter(x => x.length > 0)
-  if (headword) {
-    f = f.ele('b').txt(head).up().ele('br').up()
-  } else {
-    f = f.txt(head).ele('br').up()
-  }
-  for (const ss of tail){
-    f = f.txt(ss).ele('br').up()
+  const lines = item.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (headword && i === 0) {
+      f = f.ele('b').txt(lines[i]).up();
+    } else {
+      f = f.txt(lines[i]);
+    }
+    if (i < lines.length - 1) {
+      f = f.ele('br').up();
+    }
   }
   return [f, headword];
 }
@@ -100,14 +100,20 @@ function flatten_css(obj_style: Record<string, any>) : string{
     map(([k, v]) =>
       `${k.replace(/[A-Z]/g,match => `-${match.toLowerCase()}`)}:${v}`).join(';');
   if (style.length > 0)
-    style += ';'
-  return style
+    style += ';';
+  return style.replace(/;$/, '');
 }
 const tag_saved_prop = ['tag', 'style', 'content']
 function tagToXML(item: StructuredContentItemObject & {
   content?: StructuredContentItem;
   style?: StructuredContentItemStyle;
 }, filePathMap: Record<string, string>): XMLBuilder {
+  const handledStyles: (keyof StructuredContentItemStyle)[] = [
+    'fontStyle',
+    'fontWeight',
+    'textDecorationLine',
+    'verticalAlign',
+  ];
   let f = fragment()
   let conf: {[x: string]: any} = {}
   for (const k of Object.keys(item)) {
@@ -118,12 +124,70 @@ function tagToXML(item: StructuredContentItemObject & {
   }
 
   if (item.style) {
-    const style = flatten_css(item.style)
-    if (style.length > 0)
-      conf['style'] = style
+    const filteredStyle = Object.entries(item.style)
+      .filter(([k]) => !handledStyles.includes(k as any))
+      .reduce<Record<string, string>>((acc, [k, v]) => {
+        acc[k] = v;
+        return acc;
+      }, {});
+    const style = flatten_css(filteredStyle);
+    if (style.length > 0) {
+      conf['style'] = style;
+    }
   }
 
-  f = f.ele(item.tag, conf)
+  let addedTags: string[] = [];
+  if (item.style) {
+    for (const handledStyle of handledStyles) {
+      const propVal = item.style[handledStyle];
+      if (propVal) {
+        switch (handledStyle) {
+          case 'fontStyle':
+            if (propVal === 'italic') {
+              addedTags.push('i');
+            }
+            break;
+          case 'fontWeight':
+            if (propVal === 'bold') {
+              addedTags.push('b');
+            }
+            break;
+          case 'textDecorationLine':
+            switch (propVal) {
+              case 'underline':
+                addedTags.push('u');
+                break;
+              case 'line-through':
+                addedTags.push('s');
+                break;
+            }
+            break;
+          case 'verticalAlign':
+            switch (propVal) {
+              case 'super':
+                addedTags.push('sup');
+                break;
+              case 'sub':
+                addedTags.push('sub');
+                break;
+            }
+            break;
+        }
+      }
+    }
+  }
+
+  if (item.tag === 'span' && addedTags.length) {
+    f = f.ele(addedTags[0], conf);
+    addedTags = addedTags.slice(1);
+  } else {
+    f = f.ele(item.tag, conf)
+  }
+
+  for (const addedTag of addedTags) {
+    f = f.ele(addedTag);
+  }
+
   if (Array.isArray(item.content)) {
     for (const i of item.content.map(x => structuredContentItemToHtmlText(x, false, filePathMap)[0]))
       f = f.import(i)
@@ -132,18 +196,6 @@ function tagToXML(item: StructuredContentItemObject & {
   }
   return f
 }
-function stringToXML(s: string): XMLBuilder {
-  let f = fragment();
-  const splits = s.split('\n')
-  for (let i = 0; i < splits.length; i++) {
-    if (i > 0) {
-      f = f.ele('br').up();
-    }
-    f.txt(splits[i]);
-  }
-  return f;
-}
-
 
 function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
   if (typeof definition === 'string') {
@@ -154,7 +206,7 @@ function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean,
     let f = imgToXML(definition, filePathMap);
     f = f.ele('br').up();
     if (definition.description) {
-      f = f.ele('span').txt(definition.description).up();
+      f = f.txt(definition.description);
     }
     return [f, false];
   }
@@ -488,17 +540,7 @@ function generateInflections(data: { term: string; inflectionRule: string; origT
 
 export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword: boolean, filePathMap: Record<string, string>): KindleDictEntry {
   let headword = yomiEntry.term;
-  const processedDefinitions: string[] = [];
   let updatedDefinitions = yomiEntry.definitions;
-
-  if (firstLineAsHeadword && yomiEntry.definitions[0]) {
-    const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0], true, filePathMap);
-  //   const firstDefinitionSplit = firstDefinition.split('\n');
-  //   const headerString = firstDefinitionSplit[0];
-  //   headword = headerString;
-  //   processedDefinitions.push(firstDefinitionSplit.slice(1).join('\n'))
-  //   updatedDefinitions = yomiEntry.definitions.slice(1);
-  }
 
   let searchDataList: KindleSearchData[] = [
     yomiEntry.term,
@@ -558,20 +600,6 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
     const possibleForms: string[] = [];
     for (const searchData of kindleEntry.searchDataList) {
       possibleForms.push(searchData.term);
-
-// <<<<<<< HEAD
-//     if (kindleEntry.inflections.length) {
-//       for (const inflection of kindleEntry.inflections) {
-//         xmlEntry = xmlEntry.ele('idx:orth', {
-//           value: inflection.value,
-//         }).up();
-//       }
-//     }
-
-//     xmlEntry = xmlEntry.ele('p', {style: 'text-indent: 0;'});
-//     for (let i = 0; i < kindleEntry.definition.length; i++) {
-//       if (i > 0)
-// =======
       // Treat inflections as new writing as idx:infl doesn't deinflect 敗北 -> 敗北る
       for (const inflection of searchData.inflections) {
         possibleForms.push(inflection.value);
