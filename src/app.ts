@@ -122,6 +122,7 @@ async function main(args: Partial<{
   output: string;
   title: string;
   author: string;
+  cover_image: string;
   main_dict: string;
   debug: boolean;
 }> & {
@@ -138,6 +139,17 @@ async function main(args: Partial<{
   if (args.main_dict) {
     yomiEntries = await mergeDictData(yomiEntries, args.main_dict);
   }
+
+  let coverImageName: string | undefined;
+  if (args.cover_image) {
+    console.log('Copying cover image');
+    coverImageName = 'cover';
+    if (args.cover_image.includes('.')) {
+      coverImageName += '.' + args.cover_image.replace(/.+\./, '');
+    }
+    fsExtra.copyFileSync(args.cover_image, path.join(args.output, coverImageName));
+  }
+
 
   console.log(`Copying/converting images (Quality: ${args.image_quality})`);
   const filePathMap = await copyAndConvertFormats(input, output, yomiEntries, args.image_quality);
@@ -217,6 +229,15 @@ async function main(args: Partial<{
     }).up();
   }
 
+  if (coverImageName) {
+    opfXml = opfXml.ele('item', {
+      id: 'cover',
+      href: coverImageName,
+      'media-type': mime.lookup(coverImageName),
+      properties: 'cover-image',
+    }).up();
+  }
+
   let resourceCount = 0;
   for (const resourceFile of Object.values(filePathMap)) {
     opfXml = opfXml.ele('item', {
@@ -251,6 +272,7 @@ parser.add_argument('-i', '--input', { help: 'Input directory' });
 parser.add_argument('-o', '--output', { help: 'Output directory' });
 parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });
 parser.add_argument('-a', '--author', { help: 'Author' });
+parser.add_argument('-c', '--cover_image', { help: 'Image for the cover' });
 parser.add_argument('-m', '--main_dict', { help: 'Main dictionary to use as reference (for alt writing and frequency)' });
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
 parser.add_argument('--image_quality', { default: 75, help: 'Quality of image' })
