@@ -10,7 +10,12 @@ import path from 'path';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
 import { mergeDictData } from './utils/merge-dict-data';
-import { KindleDictEntry, kindleEntriesToXHtml, yomichanEntryToKindle } from './utils/kindle-dict-entry';
+import {
+  combineDefinitions,
+  KindleDictEntry,
+  kindleEntriesToXHtml,
+  yomichanEntryToKindle,
+} from './utils/kindle-dict-entry';
 import { YomichanEntry } from './yomichan/yomichan-formatter';
 import { Definition, StructuredContentItem } from './yomichan/yomichan-types';
 import { FilenameGenerator } from './utils/filename-generator';
@@ -160,15 +165,15 @@ async function main(args: Partial<{
     kindleEntries.push(yomichanEntryToKindle(yomiEntry, true, filePathMap));
   }
 
-  const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
+  const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry): string => combineDefinitions(kindleEntry.definitions).end());
   kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
     const mergedSearchDataList = similarKindleEntries.flatMap((x) => x.searchDataList);
 
     return {
-      headword: similarKindleEntries[0].headword,
-      boldHeadWord: similarKindleEntries[0].boldHeadWord,
+      headwords: _.uniq(similarKindleEntries.flatMap((x) => x.headwords)),
+      boldHeadword: similarKindleEntries[0].boldHeadword,
       searchDataList: _.uniqBy(mergedSearchDataList, (x) => x.term),
-      definition: similarKindleEntries[0].definition,
+      definitions: similarKindleEntries[0].definitions,
       frequency: similarKindleEntries.map((x) => x.frequency).reduce((a, b) => Math.max(a, b)),
     };
   });

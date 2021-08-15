@@ -24,10 +24,10 @@ export interface KindleSearchData {
 }
 
 export interface KindleDictEntry {
-  headword: string;
-  boldHeadWord: boolean;
+  headwords: string[];
+  boldHeadword: boolean;
   searchDataList: KindleSearchData[];
-  definition: XMLBuilder[];
+  definitions: XMLBuilder[];
   frequency: number;
 }
 
@@ -569,22 +569,32 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
       origTerm: yomiEntry.term,
     });
   }
-  let definition: XMLBuilder[] = []
-  let boldHeadWord = true
+  let definitions: XMLBuilder[] = []
+  let boldHeadword = true
   if (updatedDefinitions.length > 0) {
     const [head, ...tail] = updatedDefinitions
     const [firstDef, stat] = yomichanDefinitionToHtmlText(head, firstLineAsHeadword, filePathMap)
-    boldHeadWord = !stat
-    definition.push(firstDef)
-    definition.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false, filePathMap)[0]))
+    boldHeadword = !stat
+    definitions.push(firstDef)
+    definitions.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false, filePathMap)[0]))
   }
   return {
-    headword,
-    boldHeadWord,
+    headwords: [headword],
+    boldHeadword,
     searchDataList: _.uniqBy(searchDataList, (x) => x.term),
-    definition,
+    definitions,
     frequency: yomiEntry.frequency,
   }
+}
+
+export function combineDefinitions(definitions: XMLBuilder[]) {
+  let result = fragment();
+  for (let i = 0; i < definitions.length; i += 1) {
+    if (i > 0)
+      result = result.ele('br').up();
+    result = result.import(definitions[i]);
+  }
+  return result;
 }
 
 export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuilder {
@@ -612,17 +622,13 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
       }).up();
     }
 
-    if (kindleEntry.boldHeadWord)
-      xmlEntry = xmlEntry.ele('b').txt(kindleEntry.headword).up();
-
-    xmlEntry = xmlEntry.ele('div');
-    const defs = kindleEntry.definition
-    for (let i = 0; i < defs.length; i += 1) {
-      if (i > 0)
-        xmlEntry = xmlEntry.ele('br').up();
-      xmlEntry = xmlEntry.import(defs[i]);
+    if (kindleEntry.boldHeadword) {
+      xmlEntry = xmlEntry.ele('b').txt(_.uniq(kindleEntry.headwords).join('・')).up();
     }
-    xmlEntry = xmlEntry.up();
+
+    xmlEntry = xmlEntry.ele('div')
+      .import(combineDefinitions(kindleEntry.definitions))
+      .up();
     xmlEntries.push(xmlEntry);
   }
   let finalResult = fragment()
