@@ -1,53 +1,23 @@
 import { ArgumentParser } from 'argparse';
-import fsExtra, { copy, mkdirSync } from 'fs-extra';
+import * as easyImage from 'easyimage';
+import fsExtra from 'fs-extra';
+import htmlMinifier from 'html-minifier';
+import imagemin from 'imagemin';
+import imageminMozjpeg from 'imagemin-mozjpeg';
 import * as _ from 'lodash';
+import mime from 'mime-types';
 import path from 'path';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
-import { KindleDictEntry, kindleEntriesToXHtml, KindleInflection, yomichanEntryToKindle } from './utils/kindle-dict-entry';
-import { Definition, StructuredContentItem } from './yomichan/yomichan-types';
-import { hasOwnProperty } from './utils/hasOwnProperty';
-import { path_fix } from './utils/kindle-dict-entry';
-
-
 import { mergeDictData } from './utils/merge-dict-data';
-import util from 'util';
-import { spawn } from 'child_process';
-import { mkdir } from 'fs/promises';
+import { KindleDictEntry, kindleEntriesToXHtml, yomichanEntryToKindle } from './utils/kindle-dict-entry';
+import { YomichanEntry } from './yomichan/yomichan-formatter';
+import { Definition, StructuredContentItem } from './yomichan/yomichan-types';
+import { FilenameGenerator } from './utils/filename-generator';
 
-function spawna(cmd: string, args: string[] = []): Promise<any> {
-  return new Promise(function (resolve, reject) {
-    const process = spawn(cmd, args);
-    process.on('close', function (code) { // Should probably be 'exit', not 'close'
-      resolve(code);
-    });
-    process.on('error', function (err) {
-      reject(err);
-    });
-  })
-}
-function copyPath(input: string, output: string, opath: string, convert: boolean, cache: Set<string>): Promise<any>{
-  const fixed_path = path_fix(opath)
-  const ip = path.join(input, opath)
-  let op = path.join(output, opath)
-  const root_dir = path.dirname(op)
-  console.log(ip)
-  if (!cache.has(root_dir)){
-    mkdirSync(root_dir, { recursive: true })
-    console.log(root_dir)
-    cache.add(root_dir)
-  }
-  if (convert && fixed_path != opath) {
-    op = path.join(output, fixed_path)
 
-    return spawna('convert', [ip, '-background', 'white', '-alpha', 'remove', op])
-  } else {
-    return fsExtra.copy(ip, op);
-  }
-}
-
-function copyDefinitions(input:string, output: string, definitions: Definition[], convert:boolean, cache: Set<string>): Promise<any>[] {
-  const copySingleDef = (def: Definition | StructuredContentItem): Promise<any>[] => {
+function getFilePaths(definitions: Definition[]): string[] {
+  const copySingleDef = (def: Definition | StructuredContentItem): string[] => {
     if (typeof def !== 'object') {
       return [];
     }
@@ -58,15 +28,82 @@ function copyDefinitions(input:string, output: string, definitions: Definition[]
       return copySingleDef(def.content);
     }
     if ('path' in def) {
-      if (!cache.has(def.path)){
-        const a = copyPath(input, output, def.path, convert, cache)
-        cache.add(def.path)
-        return [a];
-      }
+      return [def.path];
     }
     return [];
   }
   return definitions.flatMap(copySingleDef);
+}
+
+async function copyAndConvertFormats(input: string, output: string, yomiEntries: YomichanEntry[], imageQuality: number) {
+  const filePathMap: Record<string, string> = {};
+  let allFilePaths: string[] = [];
+  for (const yomiEntry of yomiEntries) {
+    allFilePaths.push(...getFilePaths(yomiEntry.definitions));
+  }
+  allFilePaths = _.uniq(allFilePaths);
+  const chunkedFilePaths = _.chunk(allFilePaths, 30);
+  const filenameGenerator = new FilenameGenerator();
+  const outputRelativeDir = 'i';
+  for (let i = 0; i < chunkedFilePaths.length; i += 1) {
+    const sysPathToRelativePath: Record<string, string> = {};
+    const inputFiles = await Promise.all(chunkedFilePaths[i]
+      .map(async (filePath) => {
+        const inputPath = path.join(input, filePath);
+        let outputPath: string;
+        const supportedTypeRegex = /\.((gif)|(jpe?g)|(png))$/i;
+        if (!supportedTypeRegex.test(filePath)) {
+          outputPath = path.join(
+            output,
+            outputRelativeDir,
+            filenameGenerator.generate() + '.jpg',
+          );
+        } else {
+          outputPath = path.join(
+            output,
+            outputRelativeDir,
+            filePath.replace(/[^.]+/, filenameGenerator.generate()),
+          );
+        }
+
+        fsExtra.mkdirpSync(path.dirname(outputPath));
+        // moz has better (quality-based) compression, ignore for this step
+        await easyImage.convert({
+          src: inputPath,
+          dst: outputPath,
+          background: 'white',
+        });
+
+        const imageminInputPathFixed = outputPath.replace(/\\/g, '/');
+        sysPathToRelativePath[imageminInputPathFixed] = filePath;
+        return imageminInputPathFixed;
+      })
+    );
+
+    const conversionResults = await imagemin(inputFiles, {
+      destination: `${output}/.tmp`,
+      plugins: [
+        imageminMozjpeg({
+          quality: imageQuality,
+        }),
+      ],
+    });
+    await Promise.all(conversionResults.map((conversionResult) => {
+      const originalRelativePath = sysPathToRelativePath[conversionResult.sourcePath];
+      const newFilename = path.basename(conversionResult.sourcePath);
+      const newRelativePath = path.join(outputRelativeDir, newFilename);
+      filePathMap[originalRelativePath] = newRelativePath.replace(/\\/g, '/');
+
+      const copyToPath = path.join(output, newRelativePath);
+      fsExtra.mkdirpSync(path.dirname(copyToPath));
+      return fsExtra.rename(
+        conversionResult.destinationPath,
+        copyToPath,
+      );
+    }));
+    console.log(`Progress (Image): ${i}/${chunkedFilePaths.length} (${(i / chunkedFilePaths.length * 100).toFixed(2)}%)`);
+  }
+  return filePathMap;
 }
 
 // For unsupported characters (personal use)
@@ -81,15 +118,15 @@ function customReplacements(value: string) {
 }
 
 async function main(args: Partial<{
-
   input: string;
   output: string;
   title: string;
   author: string;
   main_dict: string;
   debug: boolean;
-  no_img_conv: boolean;
-}>) {
+}> & {
+  image_quality: number;
+}) {
   if (!args.input || !args.output || !args.title) {
     parser.print_help();
     return;
@@ -98,25 +135,18 @@ async function main(args: Partial<{
   const output: string = args.output;
   let yomiEntries = await loadDict(args.input);
   console.log('loaded dict')
-  args.no_img_conv && console.log("image convertion: ", !args.no_img_conv)
   if (args.main_dict) {
     yomiEntries = await mergeDictData(yomiEntries, args.main_dict);
   }
 
+  console.log(`Copying/converting images (Quality: ${args.image_quality})`);
+  const filePathMap = await copyAndConvertFormats(input, output, yomiEntries, args.image_quality);
+
   let kindleEntries: KindleDictEntry[] = [];
-  const convert_img = args.no_img_conv === undefined ? true : !args.no_img_conv;
-  const cache = new Set<string>()
-  let backlog : Promise<any>[] = [];
+
   for (const yomiEntry of yomiEntries) {
-    kindleEntries.push(yomichanEntryToKindle(yomiEntry, true));
-    const res = copyDefinitions(input, output, yomiEntry.definitions, convert_img, cache);
-    backlog.push(...res)
-    if (backlog.length > 100){
-      await Promise.all(backlog)
-      backlog = []
-    }
+    kindleEntries.push(yomichanEntryToKindle(yomiEntry, true, filePathMap));
   }
-  await Promise.all(backlog)
 
   const groupedKindleEntries = _.groupBy(kindleEntries, (kindleEntry) => `${kindleEntry.headword}|${kindleEntry.definition}`);
   kindleEntries = Object.values(groupedKindleEntries).map((similarKindleEntries): KindleDictEntry => {
@@ -140,7 +170,7 @@ async function main(args: Partial<{
 
   const outputDir = args.output;
   fsExtra.mkdirpSync(outputDir);
-  const chunkedKindleEntries = _.chunk(kindleEntries, 1000);
+  const chunkedKindleEntries = _.chunk(kindleEntries, 10000);
   console.log("writing html files")
   for (let i = 0; i < chunkedKindleEntries.length; i += 1) {
     const doc = kindleEntriesToXHtml(chunkedKindleEntries[i]);
@@ -151,6 +181,7 @@ async function main(args: Partial<{
     });
     let value = doc.end({ prettyPrint: args.debug });
     value = customReplacements(value);
+    value = htmlMinifier.minify(value);
     fsExtra.writeFileSync(path.join(outputDir, outputFilename), value);
 
     console.log(`Progress: ${i}/${chunkedKindleEntries.length} (${(i / chunkedKindleEntries.length * 100).toFixed(2)}%)`);
@@ -173,7 +204,7 @@ async function main(args: Partial<{
       .ele('x-metadata')
         .ele('DictionaryInLanguage').txt('ja').up()
         .ele('DictionaryOutLanguage').txt('ja').up()
-        .ele('DefaultLookupIndex').txt('japanese').up()
+        .ele('DefaultLookupIndex').txt('j').up()
       .up()
     .up();
 
@@ -184,6 +215,16 @@ async function main(args: Partial<{
       href: content.filename,
       'media-type': 'application/xhtml+xml',
     }).up();
+  }
+
+  let resourceCount = 0;
+  for (const resourceFile of Object.values(filePathMap)) {
+    opfXml = opfXml.ele('item', {
+      id: `r-${resourceCount.toString(36)}`,
+      href: resourceFile,
+      'media-type': mime.lookup(resourceFile),
+    }).up();
+    resourceCount += 1;
   }
   opfXml = opfXml.up();
 
@@ -212,7 +253,7 @@ parser.add_argument('-t', '--title', { help: 'Title of the dictionary' });
 parser.add_argument('-a', '--author', { help: 'Author' });
 parser.add_argument('-m', '--main_dict', { help: 'Main dictionary to use as reference (for alt writing and frequency)' });
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
-parser.add_argument('--no-img-conv', { const: true, action: 'store_const', help: 'Also include other conjugations' })
+parser.add_argument('--image_quality', { default: 75, help: 'Quality of image' })
 main(parser.parse_args());
 
 

@@ -2,15 +2,16 @@ import { fragment } from 'xmlbuilder2';
 import { XMLBuilder } from 'xmlbuilder2/lib/interfaces';
 import { YomichanEntry } from '../yomichan/yomichan-formatter';
 import {
-  Definition, ImageDefinition,
-  InflectionRuleEnum, StructuredContentItem,
-  StructuredContentItemObject, StructuredContentItemObjectImage, StructuredContentItemStyle,
-  StructuredDefinition
+  Definition,
+  ImageDefinition,
+  InflectionRuleEnum,
+  StructuredContentItem,
+  StructuredContentItemObject,
+  StructuredContentItemObjectImage,
+  StructuredContentItemStyle,
 } from '../yomichan/yomichan-types';
-import { toHiragana, toKatakana } from './kana-transformations';
 import { hasOwnProperty } from './hasOwnProperty';
 import * as _ from 'lodash';
-import { head, isLength } from 'lodash';
 
 export interface KindleInflection {
   name: string;
@@ -46,43 +47,32 @@ function stringDefinitionToHtmlText(item: string, headword: boolean): [XMLBuilde
   return [f, headword];
 }
 
-function structuredContentItemToHtmlText(item: StructuredContentItem, headword: boolean): [XMLBuilder, boolean] {
+function structuredContentItemToHtmlText(item: StructuredContentItem, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
   let f = fragment();
   if (typeof item === 'string') {
     return stringDefinitionToHtmlText(item, headword);
   } else if (Array.isArray(item)) {
     const [head, ...tail] = item
-    const [fi, status] = structuredContentItemToHtmlText(head, headword)
+    const [fi, status] = structuredContentItemToHtmlText(head, headword, filePathMap)
     f.import(fi)
-    const subs = tail.map((subItem) => structuredContentItemToHtmlText(subItem, false)[0]);
+    const subs = tail.map((subItem) => structuredContentItemToHtmlText(subItem, false, filePathMap)[0]);
     for (const i of subs) {
       f = f.import(i)
     }
     return [f, status]
   } else if (item.tag == 'img' && hasOwnProperty(item, 'path')) {
-    return [imgToXML(item), false]
+    return [imgToXML(item, filePathMap), false]
   } else {
     // TODO fix
-    return [tagToXML(item), false]
+    return [tagToXML(item, filePathMap), false]
   }
 }
-const img_saved_prop = ['path', 'description', 'width', 'height', 'style', 'collapsible', 'pixelated', 'imageRendering']
-export function path_fix(path: string){
-  if (path.endsWith('gif') || path.endsWith('tiff')
-  //|| path.endsWith('webp')
-  ) {
-    let npath = path.split('.');
-    npath[npath.length - 1] = 'png'
-    return npath.join('.')
-  }
 
-  return path
-}
-function imgToXML(s: ImageDefinition | StructuredContentItemObjectImage): XMLBuilder {
+function imgToXML(s: ImageDefinition | StructuredContentItemObjectImage, filePathMap: Record<string, string>): XMLBuilder {
   let f = fragment();
   let conf :{[x:string] : any} = {
-    'src': path_fix(s.path),
-    'alt': s.title
+    'src': filePathMap[s.path] || s.path,
+    'alt': s.title,
   };
 
   const unit = (s as StructuredContentItemObjectImage).sizeUnits || 'px'
@@ -93,6 +83,8 @@ function imgToXML(s: ImageDefinition | StructuredContentItemObjectImage): XMLBui
     style = {...style, height: s.height.toString() + unit}
   if (s.imageRendering)
     style = {...style, imageRendering: s.imageRendering}
+  if ('verticalAlign' in s)
+    style = {...style, verticalAlign: s.verticalAlign}
 
   if (Object.keys(style).length) {
     const sstyle = flatten_css(style)
@@ -115,7 +107,7 @@ const tag_saved_prop = ['tag', 'style', 'content']
 function tagToXML(item: StructuredContentItemObject & {
   content?: StructuredContentItem;
   style?: StructuredContentItemStyle;
-}): XMLBuilder {
+}, filePathMap: Record<string, string>): XMLBuilder {
   let f = fragment()
   let conf: {[x: string]: any} = {}
   for (const k of Object.keys(item)) {
@@ -133,10 +125,10 @@ function tagToXML(item: StructuredContentItemObject & {
 
   f = f.ele(item.tag, conf)
   if (Array.isArray(item.content)) {
-    for (const i of item.content.map(x => structuredContentItemToHtmlText(x, false)[0]))
+    for (const i of item.content.map(x => structuredContentItemToHtmlText(x, false, filePathMap)[0]))
       f = f.import(i)
   } else if (item.content != undefined) {
-    f = f.import(structuredContentItemToHtmlText(item.content, false)[0])
+    f = f.import(structuredContentItemToHtmlText(item.content, false, filePathMap)[0])
   }
   return f
 }
@@ -153,20 +145,20 @@ function stringToXML(s: string): XMLBuilder {
 }
 
 
-function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean): [XMLBuilder, boolean] {
+function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
   if (typeof definition === 'string') {
     return stringDefinitionToHtmlText(definition, headword);
   } else if (definition.type === 'text') {
     return stringDefinitionToHtmlText(definition.text, headword);
   } else if (definition.type === 'image') {
-    let f = imgToXML(definition);
+    let f = imgToXML(definition, filePathMap);
     f = f.ele('br').up();
     if (definition.description) {
       f = f.ele('span').txt(definition.description).up();
     }
     return [f, false];
   }
-  return structuredContentItemToHtmlText(definition.content, headword);
+  return structuredContentItemToHtmlText(definition.content, headword, filePathMap);
 }
 
 function convertToDan(changingKana: string, newDan: 'あ' | 'い' | 'う' | 'え' | 'お') {
@@ -494,13 +486,13 @@ function generateInflections(data: { term: string; inflectionRule: string; origT
     .filter((inf) => inf.value !== term && inf.value.length);
 }
 
-export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword = true): KindleDictEntry {
+export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadword: boolean, filePathMap: Record<string, string>): KindleDictEntry {
   let headword = yomiEntry.term;
   const processedDefinitions: string[] = [];
   let updatedDefinitions = yomiEntry.definitions;
 
   if (firstLineAsHeadword && yomiEntry.definitions[0]) {
-    const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0], true);
+    const firstDefinition = yomichanDefinitionToHtmlText(yomiEntry.definitions[0], true, filePathMap);
   //   const firstDefinitionSplit = firstDefinition.split('\n');
   //   const headerString = firstDefinitionSplit[0];
   //   headword = headerString;
@@ -539,10 +531,10 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
   let boldHeadWord = true
   if (updatedDefinitions.length > 0) {
     const [head, ...tail] = updatedDefinitions
-    const [firstDef, stat] = yomichanDefinitionToHtmlText(head, firstLineAsHeadword)
+    const [firstDef, stat] = yomichanDefinitionToHtmlText(head, firstLineAsHeadword, filePathMap)
     boldHeadWord = !stat
     definition.push(firstDef)
-    definition.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false)[0]))
+    definition.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false, filePathMap)[0]))
   }
   return {
     headword,
@@ -558,7 +550,7 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
   for (const kindleEntry of kindleEntries) {
     let xmlEntry = fragment()
       .ele('idx:entry', {
-        name: 'japanese',
+        name: 'j',
         scriptable: 'yes',
       })
       .ele('idx:short');
