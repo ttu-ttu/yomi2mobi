@@ -7,6 +7,7 @@ import imageminMozjpeg from 'imagemin-mozjpeg';
 import * as _ from 'lodash';
 import mime from 'mime-types';
 import path from 'path';
+import process from 'process';
 import { fragment } from 'xmlbuilder2';
 import { loadDict } from './utils/load-dict';
 import { mergeDictData } from './utils/merge-dict-data';
@@ -40,7 +41,15 @@ function getFilePaths(definitions: Definition[]): string[] {
   return definitions.flatMap(copySingleDef);
 }
 
-async function copyAndConvertFormats(input: string, output: string, yomiEntries: YomichanEntry[], imageQuality: number) {
+async function copyAndConvertFormats(
+  input: string,
+  output: string,
+  yomiEntries: YomichanEntry[],
+  options: {
+    imageQuality: number;
+    maxHeight?: number;
+  },
+) {
   const filePathMap: Record<string, string> = {};
   let allFilePaths: string[] = [];
   for (const yomiEntry of yomiEntries) {
@@ -72,12 +81,24 @@ async function copyAndConvertFormats(input: string, output: string, yomiEntries:
         }
 
         fsExtra.mkdirpSync(path.dirname(outputPath));
+        const additionalArgs: string[] = [];
+        if (options.maxHeight) {
+          additionalArgs.push('-resize');
+          if (process.platform === 'win32') {
+            additionalArgs.push(`x${options.maxHeight}^>`);
+          } else {
+            additionalArgs.push(`x${options.maxHeight}\\>`);
+          }
+        }
         // moz has better (quality-based) compression, ignore for this step
-        await easyImage.convert({
-          src: inputPath,
-          dst: outputPath,
-          background: 'white',
-        });
+        await easyImage.execute('convert', [
+          inputPath,
+          '-background',
+          'white',
+          '-flatten',
+          ...additionalArgs,
+          outputPath,
+        ]);
 
         const imageminInputPathFixed = outputPath.replace(/\\/g, '/');
         sysPathToRelativePath[imageminInputPathFixed] = filePath;
@@ -89,7 +110,7 @@ async function copyAndConvertFormats(input: string, output: string, yomiEntries:
       destination: `${output}/.tmp`,
       plugins: [
         imageminMozjpeg({
-          quality: imageQuality,
+          quality: options.imageQuality,
         }),
       ],
     });
@@ -130,6 +151,7 @@ async function main(args: Partial<{
   cover_image: string;
   main_dict: string;
   debug: boolean;
+  max_height: number;
 }> & {
   image_quality: number;
 }) {
@@ -157,7 +179,10 @@ async function main(args: Partial<{
 
 
   console.log(`Copying/converting images (Quality: ${args.image_quality})`);
-  const filePathMap = await copyAndConvertFormats(input, output, yomiEntries, args.image_quality);
+  const filePathMap = await copyAndConvertFormats(input, output, yomiEntries, {
+    imageQuality: args.image_quality,
+    maxHeight: args.max_height,
+  });
 
   let kindleEntries: KindleDictEntry[] = [];
 
@@ -280,7 +305,8 @@ parser.add_argument('-a', '--author', { help: 'Author' });
 parser.add_argument('-c', '--cover_image', { help: 'Image for the cover' });
 parser.add_argument('-m', '--main_dict', { help: 'Main dictionary to use as reference (for alt writing and frequency)' });
 parser.add_argument('--debug', { const: true, action: 'store_const', help: 'Print in a readable format' });
-parser.add_argument('--image_quality', { default: 75, help: 'Quality of image' })
+parser.add_argument('--image_quality', { default: 75, help: 'Quality of image' });
+parser.add_argument('--max_height', { type: 'int', help: 'Max height of image' });
 main(parser.parse_args());
 
 
