@@ -44,7 +44,7 @@ function stringDefinitionToHtmlText(item: string, headword: boolean): [XMLBuilde
       f = f.ele('br').up();
     }
   }
-  return [f, headword];
+  return [f, !/\n/.test(item) && headword];
 }
 
 function structuredContentItemToHtmlText(item: StructuredContentItem, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
@@ -52,19 +52,17 @@ function structuredContentItemToHtmlText(item: StructuredContentItem, headword: 
   if (typeof item === 'string') {
     return stringDefinitionToHtmlText(item, headword);
   } else if (Array.isArray(item)) {
-    const [head, ...tail] = item
-    const [fi, status] = structuredContentItemToHtmlText(head, headword, filePathMap)
-    f.import(fi)
-    const subs = tail.map((subItem) => structuredContentItemToHtmlText(subItem, false, filePathMap)[0]);
-    for (const i of subs) {
-      f = f.import(i)
+    let currentHeadword = headword;
+    for (const subItem of item) {
+      const [subF, subHeadword] = structuredContentItemToHtmlText(subItem, currentHeadword, filePathMap);
+      f.import(subF.doc());
+      currentHeadword = subHeadword;
     }
-    return [f, status]
+    return [f, currentHeadword];
   } else if (item.tag == 'img' && hasOwnProperty(item, 'path')) {
-    return [imgToXML(item, filePathMap), false]
+    return [imgToXML(item, filePathMap), headword]
   } else {
-    // TODO fix
-    return [tagToXML(item, filePathMap), false]
+    return tagToXML(item, headword, filePathMap);
   }
 }
 
@@ -107,7 +105,7 @@ const tag_saved_prop = ['tag', 'style', 'content']
 function tagToXML(item: StructuredContentItemObject & {
   content?: StructuredContentItem;
   style?: StructuredContentItemStyle;
-}, filePathMap: Record<string, string>): XMLBuilder {
+}, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
   const handledStyles: (keyof StructuredContentItemStyle)[] = [
     'fontStyle',
     'fontWeight',
@@ -188,13 +186,13 @@ function tagToXML(item: StructuredContentItemObject & {
     f = f.ele(addedTag);
   }
 
-  if (Array.isArray(item.content)) {
-    for (const i of item.content.map(x => structuredContentItemToHtmlText(x, false, filePathMap)[0]))
-      f = f.import(i)
-  } else if (item.content != undefined) {
-    f = f.import(structuredContentItemToHtmlText(item.content, false, filePathMap)[0])
+  let currentHeadword = headword;
+  if (item.content) {
+    const [subF, subHeadword] = structuredContentItemToHtmlText(item.content, currentHeadword, filePathMap);
+    f = f.import(subF.doc());
+    currentHeadword = subHeadword;
   }
-  return f
+  return [f, item.tag !== 'br' && currentHeadword];
 }
 
 function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean, filePathMap: Record<string, string>): [XMLBuilder, boolean] {
@@ -208,7 +206,7 @@ function yomichanDefinitionToHtmlText(definition: Definition, headword: boolean,
     if (definition.description) {
       f = f.txt(definition.description);
     }
-    return [f, false];
+    return [f, headword];
   }
   return structuredContentItemToHtmlText(definition.content, headword, filePathMap);
 }
@@ -574,7 +572,7 @@ export function yomichanEntryToKindle(yomiEntry: YomichanEntry, firstLineAsHeadw
   if (updatedDefinitions.length > 0) {
     const [head, ...tail] = updatedDefinitions
     const [firstDef, stat] = yomichanDefinitionToHtmlText(head, firstLineAsHeadword, filePathMap)
-    boldHeadword = !stat
+    boldHeadword = stat;
     definitions.push(firstDef)
     definitions.push(...tail.map((d) => yomichanDefinitionToHtmlText(d, false, filePathMap)[0]))
   }
@@ -592,7 +590,7 @@ export function combineDefinitions(definitions: XMLBuilder[]) {
   for (let i = 0; i < definitions.length; i += 1) {
     if (i > 0)
       result = result.ele('br').up();
-    result = result.import(definitions[i]);
+    result = result.import(definitions[i].doc());
   }
   return result;
 }
@@ -627,7 +625,7 @@ export function kindleEntriesToXHtml(kindleEntries: KindleDictEntry[]): XMLBuild
     }
 
     xmlEntry = xmlEntry.ele('div')
-      .import(combineDefinitions(kindleEntry.definitions))
+      .import(combineDefinitions(kindleEntry.definitions).doc())
       .up();
     xmlEntries.push(xmlEntry);
   }
